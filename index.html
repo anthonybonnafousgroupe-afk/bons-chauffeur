@@ -364,7 +364,7 @@
 <script>
 // ── Version ──────────────────────────────────────────────────────────────────
 // ⚠️ Changer ce numéro à chaque modification du code
-var APP_VERSION = '0.15';
+var APP_VERSION = '0.16';
 
 // ── Firebase ─────────────────────────────────────────────────────────────────
 // Même projet Firebase que Suivi Parc et Carburant, mais toutes les données
@@ -400,6 +400,8 @@ var allUsers = {};      // comptes
 var allCamions = {};    // camions
 var affectations = {};  // camions pris aujourd'hui : { plaque: { chauffeurId, chauffeurNom, ts } }
 var jourAffect = '';    // jour suivi (AAAA-MM-JJ)
+var maJournee = '';     // journée de travail du chauffeur : AAAA-MM-JJ, puis AAAA-MM-JJ-2, -3… s'il en démarre une autre le même jour
+var journeeRef = null;
 var mesTours = {};      // tours du chauffeur aujourd'hui : { numero: { centrale, client, quantite, adresse, … } }
 var allCentrales = {};  // centrales à béton : { clé: { nom, adresse, lat, lng, provisoire } }
 var usersRef = null, camionsRef = null, affectRef = null, toursRef = null, centralesRef = null, finRef = null;
@@ -551,7 +553,8 @@ function doLogout() {
   if (toursRef) toursRef.off();
   if (centralesRef) centralesRef.off();
   if (finRef) finRef.off();
-  maFin = null; finOuvert = false;
+  if (journeeRef) journeeRef.off();
+  maFin = null; finOuvert = false; maJournee = '';
   me = null; allUsers = {}; allCamions = {}; affectations = {}; mesTours = {}; allCentrales = {};
   $('loginPwd').value = '';
   showScreen('loginScreen');
@@ -602,18 +605,33 @@ function suivreJour() {
   jourAffect = todayStr();
   affectRef = db.ref(ROOT + '/affectations/' + jourAffect);
   affectRef.on('value', function(snap) { affectations = snap.val() || {}; renderCamions(); renderCamionJour(); renderTour(); });
+  if (journeeRef) journeeRef.off();
+  maJournee = '';
+  if (me.role === 'chauffeur') {
+    // Journée en cours : celle d'aujourd'hui, ou la suivante si une fin de journée a déjà été validée
+    journeeRef = db.ref(ROOT + '/journeeEnCours/' + me.id);
+    journeeRef.on('value', function(snap) {
+      var v = snap.val();
+      suivreJournee(v && v.date === jourAffect ? v.cle : jourAffect);
+    });
+  }
+}
+function suivreJournee(cle) {
+  if (cle === maJournee) return;
+  maJournee = cle;
   if (toursRef) toursRef.off();
-  mesTours = {};
-  if (me.role === 'chauffeur') {
-    toursRef = db.ref(ROOT + '/tours/' + jourAffect + '/' + me.id);
-    toursRef.on('value', function(snap) { mesTours = snap.val() || {}; renderTour(); });
-  }
   if (finRef) finRef.off();
-  maFin = null; finOuvert = false;
-  if (me.role === 'chauffeur') {
-    finRef = db.ref(ROOT + '/finJournee/' + jourAffect + '/' + me.id);
-    finRef.on('value', function(snap) { maFin = snap.val(); renderTour(); });
-  }
+  mesTours = {}; maFin = null; finOuvert = false; etapeForm = null;
+  toursRef = db.ref(ROOT + '/tours/' + cle + '/' + me.id);
+  toursRef.on('value', function(snap) { mesTours = snap.val() || {}; renderTour(); });
+  finRef = db.ref(ROOT + '/finJournee/' + cle + '/' + me.id);
+  finRef.on('value', function(snap) { maFin = snap.val(); renderTour(); });
+  renderTour();
+}
+// Clé de la journée suivante le même jour : 2026-10-02 → 2026-10-02-2 → 2026-10-02-3…
+function journeeSuivante() {
+  var m = maJournee.match(/^(\d{4}-\d{2}-\d{2})-(\d+)$/);
+  return maJournee === jourAffect ? jourAffect + '-2' : m && m[1] === jourAffect ? jourAffect + '-' + (Number(m[2]) + 1) : jourAffect;
 }
 document.addEventListener('visibilitychange', function() {
   if (me && document.visibilityState === 'visible' && jourAffect !== todayStr()) suivreJour();
@@ -1033,7 +1051,7 @@ function ecrireTour(f, avant, centrale, client, qte, adresse, zone, eau) {
   var btn = $('tourSaveBtn'), numero = numeroTour(f.n), lib = ordinal(numero) + ' tour';
   var distOk = !!(distInfo && distInfo.centrale === centrale && distInfo.adresse === adresse);
   btn.disabled = true;
-  db.ref(ROOT + '/tours/' + jourAffect + '/' + me.id + '/' + f.n).set({
+  db.ref(ROOT + '/tours/' + maJournee + '/' + me.id + '/' + f.n).set({
     type: 'tour', numero: numero, plaque: monCamion(), chauffeurId: me.id, chauffeurNom: me.nom,
     centrale: centrale, client: client, quantite: qte, adresse: adresse, zone: zone, gps: gpsPos && gpsAdresse === adresse ? gpsPos : (avant && avant.adresse === adresse && avant.gps) || null,
     distanceKm: distOk ? distInfo.km : null, dureeMin: distOk ? distInfo.min : null,
@@ -1057,7 +1075,7 @@ function enregistrerTransfert() {
   if (depart === arrivee) { showToast("La centrale d'arrivée doit être différente du départ"); $('trArrivee').focus(); return; }
   var avant = f.edition ? mesTours[f.n] : null, btn = $('transfertSaveBtn');
   btn.disabled = true;
-  db.ref(ROOT + '/tours/' + jourAffect + '/' + me.id + '/' + f.n).set({
+  db.ref(ROOT + '/tours/' + maJournee + '/' + me.id + '/' + f.n).set({
     type: 'transfert', plaque: monCamion(), chauffeurId: me.id, chauffeurNom: me.nom,
     depart: depart, arrivee: arrivee,
     enregistreLe: avant ? avant.enregistreLe : Date.now(), modifieLe: avant ? Date.now() : null
@@ -1102,9 +1120,10 @@ function renderFin(etapes) {
   var resume = '<div class="fin-resume">' + nbT + ' tour' + (nbT > 1 ? 's' : '') +
     (nbX ? ' et ' + nbX + ' transfert' + (nbX > 1 ? 's' : '') : '') + ' aujourd\'hui</div>';
   if (maFin && maFin.hasLV) {
-    $('finContenu').innerHTML = resume + '<div class="bl-ok">✅ Lettre de voiture envoyée à ' + heure(maFin.lvLe) + '. Bonne fin de journée !' +
+    $('finContenu').innerHTML = resume + '<div class="bl-ok">✅ Lettre de voiture envoyée à ' + heure(maFin.lvLe) +
       '<div class="item-actions"><button class="btn btn-secondary btn-small" onclick="voirLV()">👁️ Voir</button>' +
-      '<button class="btn btn-secondary btn-small" onclick="choisirBL(\'lv\')">🔄 Remplacer la photo</button></div></div>';
+      '<button class="btn btn-secondary btn-small" onclick="choisirBL(\'lv\')">🔄 Remplacer la photo</button></div></div>' +
+      '<button class="btn btn-fin" id="finValBtn" style="width:100%;margin-top:12px;font-size:17px;padding:16px" onclick="validerFinJournee()">🏁 Valider la fin de journée</button>';
   } else {
     $('finContenu').innerHTML = resume +
       '<div class="bl-zone" id="blZonelv" onclick="choisirBL(\'lv\')"><span class="big">📷</span>Envoyer la lettre de voiture journalière' +
@@ -1115,19 +1134,37 @@ function renderFin(etapes) {
 function envoyerLV(data) {
   var zone = $('blZonelv');
   if (zone) zone.innerHTML = '<span class="big">⏳</span>Envoi de la photo…';
-  var base = jourAffect + '/' + me.id, updates = {};
+  var base = maJournee + '/' + me.id, updates = {};
   updates[ROOT + '/lv/' + base] = data;
   updates[ROOT + '/finJournee/' + base] = {
     chauffeurId: me.id, chauffeurNom: me.nom, plaque: monCamion(), hasLV: true, lvLe: Date.now(),
     premierEnvoi: (maFin && maFin.premierEnvoi) || Date.now()
   };
-  db.ref().update(updates).then(function() { finOuvert = false; showToast('✅ Lettre de voiture envoyée', true); })
+  db.ref().update(updates).then(function() { showToast('✅ Lettre de voiture envoyée', true); })
     .catch(function(e) { showToast('Échec de l\'envoi : ' + e.message); renderTour(); });
+}
+// Clôture : le camion est rendu, la journée est archivée et le chauffeur revient au choix du camion
+function validerFinJournee() {
+  confirmer('Valider la fin de journée ? Le camion ' + monCamion() + ' sera rendu et vous reviendrez au menu principal.', { ok: 'Valider' }, function() {
+    var p = monCamion(), updates = {}, now = Date.now(), btn = $('finValBtn');
+    if (btn) btn.disabled = true;
+    updates[ROOT + '/finJournee/' + maJournee + '/' + me.id + '/valideLe'] = now;
+    if (p) {
+      updates[ROOT + '/historiqueCamions/' + jourAffect + '/' + db.ref(ROOT + '/historiqueCamions').push().key] =
+        Object.assign({}, affectations[p], { journee: maJournee, renduLe: now });
+      updates[ROOT + '/affectations/' + jourAffect + '/' + p] = null;
+    }
+    updates[ROOT + '/journeeEnCours/' + me.id] = { cle: journeeSuivante(), date: jourAffect };
+    db.ref().update(updates).then(function() {
+      showToast('✅ Journée terminée — vous pouvez démarrer une nouvelle journée', true);
+      window.scrollTo(0, 0);
+    }).catch(function(e) { showToast('Erreur : ' + e.message); if (btn) btn.disabled = false; });
+  });
 }
 function voirLV() {
   $('modalImg').removeAttribute('src');
   $('photoModal').classList.remove('hidden');
-  db.ref(ROOT + '/lv/' + jourAffect + '/' + me.id).once('value').then(function(snap) {
+  db.ref(ROOT + '/lv/' + maJournee + '/' + me.id).once('value').then(function(snap) {
     if (snap.val()) $('modalImg').src = snap.val();
     else { closePhoto(); showToast('Photo introuvable'); }
   });
@@ -1160,7 +1197,7 @@ function onPhotoBL(input) {
 function envoyerBL(n, data) {
   var zone = $('blZone' + n);
   if (zone) zone.innerHTML = '<span class="big">⏳</span>Envoi de la photo…';
-  var base = jourAffect + '/' + me.id + '/' + n, updates = {};
+  var base = maJournee + '/' + me.id + '/' + n, updates = {};
   // Photo rangée à part pour que les tours restent rapides à charger
   updates[ROOT + '/bl/' + base] = data;
   updates[ROOT + '/tours/' + base + '/hasBL'] = true;
@@ -1171,7 +1208,7 @@ function envoyerBL(n, data) {
 function voirBL(n) {
   $('modalImg').removeAttribute('src');
   $('photoModal').classList.remove('hidden');
-  db.ref(ROOT + '/bl/' + jourAffect + '/' + me.id + '/' + n).once('value').then(function(snap) {
+  db.ref(ROOT + '/bl/' + maJournee + '/' + me.id + '/' + n).once('value').then(function(snap) {
     if (snap.val()) $('modalImg').src = snap.val();
     else { closePhoto(); showToast('Photo introuvable'); }
   });
