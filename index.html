@@ -120,6 +120,10 @@
   .tour-fait .ligne span { color: var(--text-dim); font-size: 13px; width: 80px; flex-shrink: 0; padding-top: 1px; }
   .tour-fait .ligne b { font-weight: 600; min-width: 0; overflow-wrap: anywhere; }
   .tour-fait .btn { margin-top: 12px; }
+  .tour-fait + .tour-fait { margin-top: 18px; padding-top: 16px; border-top: 2px solid var(--border); }
+  .tour-fait.transfert .num { color: var(--text); font-size: 18px; }
+  .form-titre { font-size: 20px; font-weight: 800; color: var(--red); margin-bottom: 12px; }
+  #tourFait:not(:empty) + #tourForm, #tourFait:not(:empty) + #tourForm + #transfertForm { margin-top: 18px; padding-top: 16px; border-top: 2px solid var(--border); }
   .suite-btns { display: flex; flex-direction: column; gap: 10px; }
   .suite-btns .btn { font-size: 17px; padding: 16px; }
   .bl-zone { margin-top: 14px; border: 2px dashed var(--red-mid); border-radius: var(--radius); background: var(--red-light); text-align: center;
@@ -215,7 +219,9 @@
         <div class="card-title">🔁 Tour</div>
         <div class="field" id="tourSelField"><label>Sélectionnez le tour</label>
           <select id="choixTour" onchange="ouvrirTour()"><option value="">— Choisir —</option><option value="1">1er tour</option></select></div>
+        <div id="tourFait"></div>
         <div class="hidden" id="tourForm">
+          <div class="form-titre" id="tourFormTitre"></div>
           <div class="field"><label>Centrale à béton de départ *</label><select id="tCentrale" onchange="calculerDistance()"></select></div>
           <div class="field"><label>Nom du client *</label><input id="tClient" autocomplete="off" placeholder="Ex : SARL Martin BTP"></div>
           <div class="field"><label>Quantité (m³) *</label><input id="tQte" type="text" inputmode="decimal" autocomplete="off" placeholder="Ex : 8,5"></div>
@@ -230,7 +236,15 @@
             <button class="btn btn-primary" style="flex:2" id="tourSaveBtn" onclick="enregistrerTour()">✅ Valider le 1er tour</button>
           </div>
         </div>
-        <div class="hidden" id="tourFait"></div>
+        <div class="hidden" id="transfertForm">
+          <div class="form-titre">🔄 Transfert vers autre centrale</div>
+          <div class="field"><label>Centrale de départ *</label><select id="trDepart"></select></div>
+          <div class="field"><label>Centrale d'arrivée *</label><select id="trArrivee"></select></div>
+          <div class="input-row">
+            <button class="btn btn-secondary" style="flex:1" onclick="fermerTour()">Annuler</button>
+            <button class="btn btn-primary" style="flex:2" id="transfertSaveBtn" onclick="enregistrerTransfert()">✅ Valider le transfert</button>
+          </div>
+        </div>
       </div>
       <!-- Chauffeur : suite de la journée une fois le tour enregistré -->
       <div class="card hidden" style="max-width:none;margin-bottom:16px" id="suiteCard">
@@ -342,7 +356,7 @@
 <script>
 // ── Version ──────────────────────────────────────────────────────────────────
 // ⚠️ Changer ce numéro à chaque modification du code
-var APP_VERSION = '0.13';
+var APP_VERSION = '0.14';
 
 // ── Firebase ─────────────────────────────────────────────────────────────────
 // Même projet Firebase que Suivi Parc et Carburant, mais toutes les données
@@ -684,7 +698,7 @@ function zoneDe(km) {
   var z = Math.max(1, Math.ceil(km / 10));
   return z <= 6 ? 'Zone ' + z : 'Hors zone';
 }
-var editionTour = false;  // formulaire rouvert pour modifier le tour enregistré
+var etapeForm = null;     // formulaire ouvert : { n: n° d'étape de la journée, type: 'tour' | 'transfert', edition: true si modification }
 var gpsPos = null;        // position GPS relevée pour l'adresse de livraison
 var gpsAdresse = '';      // adresse remplie à partir de cette position
 var distInfo = null;      // { centrale, adresse, km, min } : dernière distance calculée
@@ -850,69 +864,139 @@ function localiser() {
 
 function fmtQte(q) { return String(q).replace('.', ',') + ' m³'; }
 
+// La journée du chauffeur est une suite d'étapes (tours et transferts) rangées à /tours/{jour}/{chauffeur}/{n}
+function ordinal(n) { return n === 1 ? '1er' : n + 'e'; }
+function etapesTriees() { return Object.keys(mesTours).map(Number).filter(function(n) { return mesTours[n]; }).sort(function(a, b) { return a - b; }); }
+function prochaineEtape() { var k = etapesTriees(); return k.length ? k[k.length - 1] + 1 : 1; }
+function estTransfert(n) { return mesTours[n] && mesTours[n].type === 'transfert'; }
+// Numéro du tour (1er, 2e…) : les transferts ne comptent pas
+function numeroTour(n) {
+  if (mesTours[n] && mesTours[n].numero && !estTransfert(n)) return mesTours[n].numero;
+  return etapesTriees().filter(function(k) { return k < n && !estTransfert(k); }).length + 1;
+}
+// Centrale où se trouve le camion après la dernière étape (pré-remplissage)
+function centraleActuelle() {
+  var k = etapesTriees();
+  if (!k.length) return '';
+  var d = mesTours[k[k.length - 1]];
+  return d.type === 'transfert' ? d.arrivee : d.centrale;
+}
+
 function renderTour() {
   if (!me || me.role !== 'chauffeur') return;
   var camion = monCamion();
   $('tourCard').classList.toggle('hidden', !camion);
-  var tour = camion && mesTours[1];
-  // Une fois le tour enregistré, les deux boutons remplacent « écrans à venir »
-  $('suiteCard').classList.toggle('hidden', !tour || editionTour);
-  $('bientotCard').classList.toggle('hidden', !!tour && !editionTour);
+  var etapes = camion ? etapesTriees() : [], f = etapeForm;
+  // Une fois une étape enregistrée, les deux boutons remplacent « écrans à venir »
+  $('suiteCard').classList.toggle('hidden', !etapes.length || !!f);
+  $('bientotCard').classList.toggle('hidden', !!etapes.length);
   if (!camion) return;
-  var formOuvert = editionTour || (!tour && $('choixTour').value === '1');
-  $('tourSelField').classList.toggle('hidden', !!tour);
-  $('tourForm').classList.toggle('hidden', !formOuvert);
-  $('tourFait').classList.toggle('hidden', !tour || editionTour);
-  if (tour && !editionTour) {
-    $('tourFait').innerHTML = '<div class="tour-fait"><div class="num">1er tour</div>' +
-      '<div class="ligne"><span>Centrale</span><b>' + escHtml(tour.centrale) + '</b></div>' +
-      '<div class="ligne"><span>Client</span><b>' + escHtml(tour.client) + '</b></div>' +
-      '<div class="ligne"><span>Quantité</span><b>' + escHtml(fmtQte(tour.quantite)) + '</b></div>' +
-      '<div class="ligne"><span>Livraison</span><b>' + escHtml(tour.adresse) +
-        (tour.gps ? ' <a href="https://www.google.com/maps?q=' + Number(tour.gps.lat) + ',' + Number(tour.gps.lng) + '" target="_blank" rel="noopener" style="color:var(--red);font-size:13px;white-space:nowrap">🗺️ Carte</a>' : '') + '</b></div>' +
-      (tour.distanceKm != null ? '<div class="ligne"><span>Distance</span><b>' + fmtKm(tour.distanceKm) + ' (≈ ' + fmtMin(tour.dureeMin) + ')</b></div>' : '') +
-      '<div class="ligne"><span>Zone</span><b>' + escHtml(tour.zone || '—') + '</b></div>' +
-      '<div class="ligne"><span>Eau</span><b>' + (tour.eauAjout ? '💧 Oui — ' + escHtml(String(tour.eauLitres).replace('.', ',')) + ' L' : 'Pas de rajout') + '</b></div>' +
-      '<div class="item-sub">Enregistré à ' + heure(tour.enregistreLe) + ' — <span class="plaque" style="font-size:12px">' + escHtml(tour.plaque) + '</span></div>' +
-      '<button class="btn btn-secondary btn-small" onclick="modifierTour()">✏️ Modifier</button>' +
-      (tour.hasBL
-        ? '<div class="bl-ok">✅ Bon de livraison envoyé à ' + heure(tour.blLe) +
-            '<div class="item-actions"><button class="btn btn-secondary btn-small" onclick="voirBL()">👁️ Voir</button>' +
-            '<button class="btn btn-secondary btn-small" onclick="$(\'blPhoto\').click()">🔄 Remplacer la photo</button></div></div>'
-        : '<div class="bl-zone" id="blZone" onclick="$(\'blPhoto\').click()"><span class="big">📷</span>Envoyer le bon de livraison' +
-            '<small>Une fois la livraison terminée, prenez le bon en photo, posé à plat et bien éclairé</small></div>') +
-      '</div>';
+  $('tourSelField').classList.toggle('hidden', !!etapes.length);
+  $('tourForm').classList.toggle('hidden', !f || f.type !== 'tour');
+  $('transfertForm').classList.toggle('hidden', !f || f.type !== 'transfert');
+  if (f && f.type === 'tour') {
+    var lib = ordinal(numeroTour(f.n)) + ' tour';
+    $('tourFormTitre').textContent = f.edition ? '✏️ Modifier le ' + lib : lib;
+    $('tourFormTitre').classList.toggle('hidden', !etapes.length);
+    $('tourSaveBtn').textContent = '✅ Valider le ' + lib;
   }
+  $('tourFait').innerHTML = etapes.filter(function(n) { return !(f && f.edition && f.n === n); }).map(resumeEtape).join('');
 }
 
-// Le 1er tour est sélectionné : le formulaire s'ouvre
-function ouvrirTour() {
-  if ($('choixTour').value === '1' && $('tZone').options.length <= 1) {
+function resumeEtape(n) {
+  var tour = mesTours[n];
+  var pied = '<div class="item-sub">Enregistré à ' + heure(tour.enregistreLe) + ' — <span class="plaque" style="font-size:12px">' + escHtml(tour.plaque) + '</span></div>' +
+    '<button class="btn btn-secondary btn-small" onclick="modifierEtape(' + n + ')">✏️ Modifier</button>';
+  if (tour.type === 'transfert') {
+    return '<div class="tour-fait transfert"><div class="num">🔄 Transfert vers autre centrale</div>' +
+      '<div class="ligne"><span>Départ</span><b>' + escHtml(tour.depart) + '</b></div>' +
+      '<div class="ligne"><span>Arrivée</span><b>' + escHtml(tour.arrivee) + '</b></div>' + pied + '</div>';
+  }
+  return '<div class="tour-fait"><div class="num">' + ordinal(tour.numero || 1) + ' tour</div>' +
+    '<div class="ligne"><span>Centrale</span><b>' + escHtml(tour.centrale) + '</b></div>' +
+    '<div class="ligne"><span>Client</span><b>' + escHtml(tour.client) + '</b></div>' +
+    '<div class="ligne"><span>Quantité</span><b>' + escHtml(fmtQte(tour.quantite)) + '</b></div>' +
+    '<div class="ligne"><span>Livraison</span><b>' + escHtml(tour.adresse) +
+      (tour.gps ? ' <a href="https://www.google.com/maps?q=' + Number(tour.gps.lat) + ',' + Number(tour.gps.lng) + '" target="_blank" rel="noopener" style="color:var(--red);font-size:13px;white-space:nowrap">🗺️ Carte</a>' : '') + '</b></div>' +
+    (tour.distanceKm != null ? '<div class="ligne"><span>Distance</span><b>' + fmtKm(tour.distanceKm) + ' (≈ ' + fmtMin(tour.dureeMin) + ')</b></div>' : '') +
+    '<div class="ligne"><span>Zone</span><b>' + escHtml(tour.zone || '—') + '</b></div>' +
+    '<div class="ligne"><span>Eau</span><b>' + (tour.eauAjout ? '💧 Oui — ' + escHtml(String(tour.eauLitres).replace('.', ',')) + ' L' : 'Pas de rajout') + '</b></div>' +
+    pied +
+    (tour.hasBL
+      ? '<div class="bl-ok">✅ Bon de livraison envoyé à ' + heure(tour.blLe) +
+          '<div class="item-actions"><button class="btn btn-secondary btn-small" onclick="voirBL(' + n + ')">👁️ Voir</button>' +
+          '<button class="btn btn-secondary btn-small" onclick="choisirBL(' + n + ')">🔄 Remplacer la photo</button></div></div>'
+      : '<div class="bl-zone" id="blZone' + n + '" onclick="choisirBL(' + n + ')"><span class="big">📷</span>Envoyer le bon de livraison' +
+          '<small>Une fois la livraison terminée, prenez le bon en photo, posé à plat et bien éclairé</small></div>') +
+    '</div>';
+}
+
+function viderFormTour() {
+  ['tClient', 'tQte', 'tAdresse'].forEach(function(f) { $(f).value = ''; });
+  $('tCentrale').value = ''; $('tZone').value = '';
+  gpsPos = null; gpsAdresse = ''; distInfo = null; $('adresseHint').textContent = ''; $('zoneHint').textContent = '';
+}
+function ouvrirFormTour(n, edition) {
+  if ($('tZone').options.length <= 1) {
     $('tZone').innerHTML = '<option value="">— Choisir la zone —</option>' +
       ZONES.map(function(z) { return '<option>' + z + '</option>'; }).join('');
   }
+  etapeForm = { n: n, type: 'tour', edition: edition };
   remplirCentrales();
   renderTour();
 }
+function allerAuFormulaire(id) { setTimeout(function() { $(id).scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 50); }
+
+// Le 1er tour est sélectionné : le formulaire s'ouvre
+function ouvrirTour() {
+  if ($('choixTour').value !== '1') { etapeForm = null; renderTour(); return; }
+  viderFormTour();
+  ouvrirFormTour(prochaineEtape(), false);
+}
+// « Tour suivant » : même formulaire, centrale pré-remplie avec celle où se trouve le camion
+function tourSuivant() {
+  viderFormTour();
+  ouvrirFormTour(prochaineEtape(), false);
+  $('tCentrale').value = centraleActuelle();
+  allerAuFormulaire('tourForm');
+}
+// « Transfert vers autre centrale » : centrale de départ et centrale d'arrivée
+function transfertCentrale() {
+  etapeForm = { n: prochaineEtape(), type: 'transfert', edition: false };
+  remplirCentrales();
+  $('trDepart').value = centraleActuelle(); $('trArrivee').value = '';
+  renderTour();
+  allerAuFormulaire('transfertForm');
+}
 function fermerTour() {
-  editionTour = false; gpsPos = null; gpsAdresse = ''; distInfo = null; $('adresseHint').textContent = ''; $('zoneHint').textContent = '';
+  etapeForm = null; viderFormTour();
   $('choixTour').value = '';
   renderTour();
 }
-function modifierTour() {
-  var tour = mesTours[1];
-  editionTour = true;
-  $('choixTour').value = '1'; ouvrirTour();
+function modifierEtape(n) {
+  var tour = mesTours[n];
+  if (!tour) return;
+  if (tour.type === 'transfert') {
+    etapeForm = { n: n, type: 'transfert', edition: true };
+    remplirCentrales();
+    $('trDepart').value = tour.depart; $('trArrivee').value = tour.arrivee;
+    renderTour(); allerAuFormulaire('transfertForm');
+    return;
+  }
+  viderFormTour();
+  ouvrirFormTour(n, true);
   $('tCentrale').value = tour.centrale; $('tClient').value = tour.client;
   $('tQte').value = String(tour.quantite).replace('.', ','); $('tAdresse').value = tour.adresse;
   $('tZone').value = tour.zone || '';
   distInfo = tour.distanceKm != null ? { centrale: tour.centrale, adresse: tour.adresse, km: tour.distanceKm, min: tour.dureeMin } : null;
   $('zoneHint').className = 'hint' + (distInfo ? ' ok' : '');
   $('zoneHint').textContent = distInfo ? '🛣️ ' + fmtKm(distInfo.km) + ' depuis ' + distInfo.centrale + ' (≈ ' + fmtMin(distInfo.min) + ')' : '';
-  renderTour();
+  renderTour(); allerAuFormulaire('tourForm');
 }
 
 function enregistrerTour() {
+  var f = etapeForm;
+  if (!f || f.type !== 'tour') return;
   var centrale = $('tCentrale').value, client = $('tClient').value.trim(), adresse = $('tAdresse').value.trim(), zone = $('tZone').value;
   var qte = Number($('tQte').value.replace(',', '.').replace(/\s/g, ''));
   if (!centrale) { showToast('Choisissez la centrale à béton de départ'); $('tCentrale').focus(); return; }
@@ -920,35 +1004,49 @@ function enregistrerTour() {
   if (!qte || qte <= 0) { showToast('Indiquez la quantité en m³'); $('tQte').focus(); return; }
   if (!adresse) { showToast("Indiquez l'adresse de livraison"); $('tAdresse').focus(); return; }
   if (!zone) { showToast('Choisissez la zone'); $('tZone').focus(); return; }
-  var avant = mesTours[1];
-  demanderEau(avant, function(eau) { ecrireTour(centrale, client, qte, adresse, zone, eau); });
+  var avant = f.edition ? mesTours[f.n] : null;
+  demanderEau(avant, function(eau) { ecrireTour(f, avant, centrale, client, qte, adresse, zone, eau); });
 }
 
-function ecrireTour(centrale, client, qte, adresse, zone, eau) {
-  var btn = $('tourSaveBtn'), avant = mesTours[1];
+function ecrireTour(f, avant, centrale, client, qte, adresse, zone, eau) {
+  var btn = $('tourSaveBtn'), numero = numeroTour(f.n), lib = ordinal(numero) + ' tour';
   var distOk = !!(distInfo && distInfo.centrale === centrale && distInfo.adresse === adresse);
   btn.disabled = true;
-  db.ref(ROOT + '/tours/' + jourAffect + '/' + me.id + '/1').set({
-    eauAjout: eau.ajout, eauLitres: eau.ajout ? eau.litres : null,
-    hasBL: !!(avant && avant.hasBL), blLe: (avant && avant.blLe) || null,
-    numero: 1, plaque: monCamion(), chauffeurId: me.id, chauffeurNom: me.nom,
+  db.ref(ROOT + '/tours/' + jourAffect + '/' + me.id + '/' + f.n).set({
+    type: 'tour', numero: numero, plaque: monCamion(), chauffeurId: me.id, chauffeurNom: me.nom,
     centrale: centrale, client: client, quantite: qte, adresse: adresse, zone: zone, gps: gpsPos && gpsAdresse === adresse ? gpsPos : (avant && avant.adresse === adresse && avant.gps) || null,
     distanceKm: distOk ? distInfo.km : null, dureeMin: distOk ? distInfo.min : null,
+    eauAjout: eau.ajout, eauLitres: eau.ajout ? eau.litres : null,
+    hasBL: !!(avant && avant.hasBL), blLe: (avant && avant.blLe) || null,
     enregistreLe: avant ? avant.enregistreLe : Date.now(), modifieLe: avant ? Date.now() : null
   }).then(function() {
-    showToast(avant ? '✅ 1er tour modifié' : '✅ 1er tour enregistré', true);
-    editionTour = false;
-    ['tClient', 'tQte', 'tAdresse'].forEach(function(f) { $(f).value = ''; });
-    $('tCentrale').value = ''; $('tZone').value = ''; $('choixTour').value = '';
-    gpsPos = null; gpsAdresse = ''; distInfo = null; $('adresseHint').textContent = ''; $('zoneHint').textContent = '';
+    showToast('✅ ' + lib + (avant ? ' modifié' : ' enregistré'), true);
+    etapeForm = null; viderFormTour(); $('choixTour').value = '';
     renderTour();
   }).catch(function(e) { showToast('Erreur : ' + e.message); })
     .then(function() { btn.disabled = false; });
 }
 
-// Écrans à construire : pour l'instant les boutons préviennent seulement
-function tourSuivant() { showToast('Tour suivant : écran à venir'); }
-function transfertCentrale() { showToast('Transfert vers autre centrale : écran à venir'); }
+function enregistrerTransfert() {
+  var f = etapeForm;
+  if (!f || f.type !== 'transfert') return;
+  var depart = $('trDepart').value, arrivee = $('trArrivee').value;
+  if (!depart) { showToast('Choisissez la centrale de départ'); $('trDepart').focus(); return; }
+  if (!arrivee) { showToast("Choisissez la centrale d'arrivée"); $('trArrivee').focus(); return; }
+  if (depart === arrivee) { showToast("La centrale d'arrivée doit être différente du départ"); $('trArrivee').focus(); return; }
+  var avant = f.edition ? mesTours[f.n] : null, btn = $('transfertSaveBtn');
+  btn.disabled = true;
+  db.ref(ROOT + '/tours/' + jourAffect + '/' + me.id + '/' + f.n).set({
+    type: 'transfert', plaque: monCamion(), chauffeurId: me.id, chauffeurNom: me.nom,
+    depart: depart, arrivee: arrivee,
+    enregistreLe: avant ? avant.enregistreLe : Date.now(), modifieLe: avant ? Date.now() : null
+  }).then(function() {
+    showToast(avant ? '✅ Transfert modifié' : '✅ Transfert enregistré', true);
+    etapeForm = null;
+    renderTour();
+  }).catch(function(e) { showToast('Erreur : ' + e.message); })
+    .then(function() { btn.disabled = false; });
+}
 
 // ── Rajout d'eau : question posée à la validation du tour ────────────────────
 var eauCb = null;
@@ -975,10 +1073,12 @@ function validerEau() {
 
 // ── Photo du bon de livraison ────────────────────────────────────────────────
 // Redimensionnée et compressée pour rester légère mais lisible
+var blCible = null;  // étape dont on envoie le bon
+function choisirBL(n) { blCible = n; $('blPhoto').click(); }
 function onPhotoBL(input) {
-  var file = input.files && input.files[0];
+  var file = input.files && input.files[0], n = blCible;
   input.value = '';
-  if (!file || !mesTours[1]) return;
+  if (!file || n == null || !mesTours[n]) return;
   var reader = new FileReader();
   reader.onload = function(e) {
     var img = new Image();
@@ -988,17 +1088,17 @@ function onPhotoBL(input) {
       var c = document.createElement('canvas');
       c.width = w; c.height = h;
       c.getContext('2d').drawImage(img, 0, 0, w, h);
-      envoyerBL(c.toDataURL('image/jpeg', 0.72));
+      envoyerBL(n, c.toDataURL('image/jpeg', 0.72));
     };
     img.onerror = function() { showToast('Image illisible, reprenez la photo'); };
     img.src = e.target.result;
   };
   reader.readAsDataURL(file);
 }
-function envoyerBL(data) {
-  var zone = $('blZone');
+function envoyerBL(n, data) {
+  var zone = $('blZone' + n);
   if (zone) zone.innerHTML = '<span class="big">⏳</span>Envoi de la photo…';
-  var base = jourAffect + '/' + me.id + '/1', updates = {};
+  var base = jourAffect + '/' + me.id + '/' + n, updates = {};
   // Photo rangée à part pour que les tours restent rapides à charger
   updates[ROOT + '/bl/' + base] = data;
   updates[ROOT + '/tours/' + base + '/hasBL'] = true;
@@ -1006,10 +1106,10 @@ function envoyerBL(data) {
   db.ref().update(updates).then(function() { showToast('✅ Bon de livraison envoyé', true); })
     .catch(function(e) { showToast('Échec de l\'envoi : ' + e.message); renderTour(); });
 }
-function voirBL() {
+function voirBL(n) {
   $('modalImg').removeAttribute('src');
   $('photoModal').classList.remove('hidden');
-  db.ref(ROOT + '/bl/' + jourAffect + '/' + me.id + '/1').once('value').then(function(snap) {
+  db.ref(ROOT + '/bl/' + jourAffect + '/' + me.id + '/' + n).once('value').then(function(snap) {
     if (snap.val()) $('modalImg').src = snap.val();
     else { closePhoto(); showToast('Photo introuvable'); }
   });
@@ -1018,11 +1118,13 @@ function closePhoto() { $('photoModal').classList.add('hidden'); }
 
 // Liste des centrales du formulaire du tour (centrales en service)
 function remplirCentrales() {
-  var sel = $('tCentrale'), cur = sel.value;
-  var noms = centralesTriees().filter(function(c) { return c.actif !== false; }).map(function(c) { return c.nom; });
-  if (cur && noms.indexOf(cur) === -1) noms.push(cur);
-  sel.innerHTML = '<option value="">— Choisir la centrale —</option>' + noms.map(function(n) { return '<option>' + escHtml(n) + '</option>'; }).join('');
-  sel.value = cur;
+  var ouvertes = centralesTriees().filter(function(c) { return c.actif !== false; }).map(function(c) { return c.nom; });
+  ['tCentrale', 'trDepart', 'trArrivee'].forEach(function(id) {
+    var sel = $(id), cur = sel.value, noms = ouvertes.slice();
+    if (cur && noms.indexOf(cur) === -1) noms.push(cur);
+    sel.innerHTML = '<option value="">— Choisir la centrale —</option>' + noms.map(function(n) { return '<option>' + escHtml(n) + '</option>'; }).join('');
+    sel.value = cur;
+  });
 }
 
 // ── Administration : centrales à béton ───────────────────────────────────────
