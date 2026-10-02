@@ -120,6 +120,19 @@
   .tour-fait .ligne span { color: var(--text-dim); font-size: 13px; width: 80px; flex-shrink: 0; padding-top: 1px; }
   .tour-fait .ligne b { font-weight: 600; min-width: 0; overflow-wrap: anywhere; }
   .tour-fait .btn { margin-top: 12px; }
+  .bl-zone { margin-top: 14px; border: 2px dashed var(--red-mid); border-radius: var(--radius); background: var(--red-light); text-align: center;
+    padding: 18px 12px; cursor: pointer; color: var(--red); font-weight: 700; }
+  .bl-zone .big { font-size: 32px; display: block; margin-bottom: 4px; }
+  .bl-zone small { display: block; font-weight: 500; color: var(--text-dim); margin-top: 4px; }
+  .bl-ok { margin-top: 14px; background: #e3f5ea; color: var(--ok); border-radius: 10px; padding: 12px; font-weight: 700; font-size: 14px; }
+  .bl-ok .item-actions { margin-top: 8px; }
+  .eau-btns { display: flex; gap: 10px; }
+  .eau-btns .btn { flex: 1; font-size: 18px; padding: 16px; }
+  .dlg-titre { font-size: 18px; font-weight: 800; margin-bottom: 14px; text-align: center; }
+  .modal-bg { position: fixed; inset: 0; background: rgba(0,0,0,.85); z-index: 70; display: flex; align-items: center; justify-content: center; padding: 16px; }
+  .modal-bg img { max-width: 100%; max-height: 100%; border-radius: 8px; background: #fff; }
+  .modal-close { position: fixed; top: calc(14px + env(safe-area-inset-top)); right: 14px; background: #fff; border: none; border-radius: 50%;
+    width: 40px; height: 40px; font-size: 20px; cursor: pointer; }
 
   .toast { position: fixed; left: 50%; bottom: calc(90px + env(safe-area-inset-bottom)); transform: translateX(-50%); background: #1a1a1a; color: #fff;
     padding: 12px 18px; border-radius: 10px; font-size: 14px; font-weight: 600; z-index: 100; max-width: calc(100% - 32px); text-align: center;
@@ -279,6 +292,32 @@
 </div>
 
 <div class="toast" id="toast"></div>
+
+<!-- Rajout d'eau (à la validation du tour) -->
+<div class="dlg-bg hidden" id="eauBg">
+  <div class="dlg" role="dialog" aria-modal="true">
+    <div class="dlg-titre">💧 Y a-t-il eu un rajout d'eau ?</div>
+    <div class="eau-btns" id="eauChoix">
+      <button class="btn btn-secondary" onclick="repondreEau(false)">Non</button>
+      <button class="btn btn-primary" onclick="repondreEau(true)">Oui</button>
+    </div>
+    <div class="hidden" id="eauLitresBloc">
+      <div class="field"><label>Combien de litres ? *</label><input id="eauLitres" type="text" inputmode="decimal" autocomplete="off" placeholder="Ex : 50"
+        onkeydown="if(event.key==='Enter')validerEau()"></div>
+      <div class="dlg-btns">
+        <button class="btn btn-secondary" onclick="eauRetour()">Retour</button>
+        <button class="btn btn-primary" style="width:auto" onclick="validerEau()">Valider</button>
+      </div>
+    </div>
+    <button class="btn btn-secondary btn-small" style="width:100%;margin-top:12px;border:none" onclick="fermerEau()">Annuler</button>
+  </div>
+</div>
+
+<input type="file" id="blPhoto" accept="image/*" capture="environment" class="hidden" onchange="onPhotoBL(this)">
+<div class="modal-bg hidden" id="photoModal" onclick="closePhoto()">
+  <button class="modal-close" onclick="closePhoto()">✕</button>
+  <img id="modalImg" alt="Bon de livraison">
+</div>
 <div class="dlg-bg hidden" id="dlgBg">
   <div class="dlg" role="dialog" aria-modal="true">
     <div class="dlg-msg" id="dlgMsg"></div>
@@ -294,7 +333,7 @@
 <script>
 // ── Version ──────────────────────────────────────────────────────────────────
 // ⚠️ Changer ce numéro à chaque modification du code
-var APP_VERSION = '0.11';
+var APP_VERSION = '0.12';
 
 // ── Firebase ─────────────────────────────────────────────────────────────────
 // Même projet Firebase que Suivi Parc et Carburant, mais toutes les données
@@ -821,8 +860,16 @@ function renderTour() {
         (tour.gps ? ' <a href="https://www.google.com/maps?q=' + Number(tour.gps.lat) + ',' + Number(tour.gps.lng) + '" target="_blank" rel="noopener" style="color:var(--red);font-size:13px;white-space:nowrap">🗺️ Carte</a>' : '') + '</b></div>' +
       (tour.distanceKm != null ? '<div class="ligne"><span>Distance</span><b>' + fmtKm(tour.distanceKm) + ' (≈ ' + fmtMin(tour.dureeMin) + ')</b></div>' : '') +
       '<div class="ligne"><span>Zone</span><b>' + escHtml(tour.zone || '—') + '</b></div>' +
+      '<div class="ligne"><span>Eau</span><b>' + (tour.eauAjout ? '💧 Oui — ' + escHtml(String(tour.eauLitres).replace('.', ',')) + ' L' : 'Pas de rajout') + '</b></div>' +
       '<div class="item-sub">Enregistré à ' + heure(tour.enregistreLe) + ' — <span class="plaque" style="font-size:12px">' + escHtml(tour.plaque) + '</span></div>' +
-      '<button class="btn btn-secondary btn-small" onclick="modifierTour()">✏️ Modifier</button></div>';
+      '<button class="btn btn-secondary btn-small" onclick="modifierTour()">✏️ Modifier</button>' +
+      (tour.hasBL
+        ? '<div class="bl-ok">✅ Bon de livraison envoyé à ' + heure(tour.blLe) +
+            '<div class="item-actions"><button class="btn btn-secondary btn-small" onclick="voirBL()">👁️ Voir</button>' +
+            '<button class="btn btn-secondary btn-small" onclick="$(\'blPhoto\').click()">🔄 Remplacer la photo</button></div></div>'
+        : '<div class="bl-zone" id="blZone" onclick="$(\'blPhoto\').click()"><span class="big">📷</span>Envoyer le bon de livraison' +
+            '<small>Une fois la livraison terminée, prenez le bon en photo, posé à plat et bien éclairé</small></div>') +
+      '</div>';
   }
 }
 
@@ -861,10 +908,17 @@ function enregistrerTour() {
   if (!qte || qte <= 0) { showToast('Indiquez la quantité en m³'); $('tQte').focus(); return; }
   if (!adresse) { showToast("Indiquez l'adresse de livraison"); $('tAdresse').focus(); return; }
   if (!zone) { showToast('Choisissez la zone'); $('tZone').focus(); return; }
+  var avant = mesTours[1];
+  demanderEau(avant, function(eau) { ecrireTour(centrale, client, qte, adresse, zone, eau); });
+}
+
+function ecrireTour(centrale, client, qte, adresse, zone, eau) {
   var btn = $('tourSaveBtn'), avant = mesTours[1];
   var distOk = !!(distInfo && distInfo.centrale === centrale && distInfo.adresse === adresse);
   btn.disabled = true;
   db.ref(ROOT + '/tours/' + jourAffect + '/' + me.id + '/1').set({
+    eauAjout: eau.ajout, eauLitres: eau.ajout ? eau.litres : null,
+    hasBL: !!(avant && avant.hasBL), blLe: (avant && avant.blLe) || null,
     numero: 1, plaque: monCamion(), chauffeurId: me.id, chauffeurNom: me.nom,
     centrale: centrale, client: client, quantite: qte, adresse: adresse, zone: zone, gps: gpsPos && gpsAdresse === adresse ? gpsPos : (avant && avant.adresse === adresse && avant.gps) || null,
     distanceKm: distOk ? distInfo.km : null, dureeMin: distOk ? distInfo.min : null,
@@ -879,6 +933,72 @@ function enregistrerTour() {
   }).catch(function(e) { showToast('Erreur : ' + e.message); })
     .then(function() { btn.disabled = false; });
 }
+
+// ── Rajout d'eau : question posée à la validation du tour ────────────────────
+var eauCb = null;
+function demanderEau(avant, cb) {
+  eauCb = cb;
+  $('eauChoix').classList.remove('hidden');
+  $('eauLitresBloc').classList.add('hidden');
+  $('eauLitres').value = avant && avant.eauAjout ? String(avant.eauLitres).replace('.', ',') : '';
+  $('eauBg').classList.remove('hidden');
+}
+function fermerEau() { $('eauBg').classList.add('hidden'); eauCb = null; }
+function repondreEau(oui) {
+  if (!oui) { var cb = eauCb; fermerEau(); cb({ ajout: false }); return; }
+  $('eauChoix').classList.add('hidden');
+  $('eauLitresBloc').classList.remove('hidden');
+  setTimeout(function() { $('eauLitres').focus(); }, 50);
+}
+function eauRetour() { $('eauChoix').classList.remove('hidden'); $('eauLitresBloc').classList.add('hidden'); }
+function validerEau() {
+  var l = Number($('eauLitres').value.replace(',', '.').replace(/\s/g, ''));
+  if (!l || l <= 0) { showToast('Indiquez le nombre de litres d\'eau ajoutés'); $('eauLitres').focus(); return; }
+  var cb = eauCb; fermerEau(); cb({ ajout: true, litres: l });
+}
+
+// ── Photo du bon de livraison ────────────────────────────────────────────────
+// Redimensionnée et compressée pour rester légère mais lisible
+function onPhotoBL(input) {
+  var file = input.files && input.files[0];
+  input.value = '';
+  if (!file || !mesTours[1]) return;
+  var reader = new FileReader();
+  reader.onload = function(e) {
+    var img = new Image();
+    img.onload = function() {
+      var MAX = 1600, w = img.width, h = img.height;
+      if (Math.max(w, h) > MAX) { var r = MAX / Math.max(w, h); w = Math.round(w * r); h = Math.round(h * r); }
+      var c = document.createElement('canvas');
+      c.width = w; c.height = h;
+      c.getContext('2d').drawImage(img, 0, 0, w, h);
+      envoyerBL(c.toDataURL('image/jpeg', 0.72));
+    };
+    img.onerror = function() { showToast('Image illisible, reprenez la photo'); };
+    img.src = e.target.result;
+  };
+  reader.readAsDataURL(file);
+}
+function envoyerBL(data) {
+  var zone = $('blZone');
+  if (zone) zone.innerHTML = '<span class="big">⏳</span>Envoi de la photo…';
+  var base = jourAffect + '/' + me.id + '/1', updates = {};
+  // Photo rangée à part pour que les tours restent rapides à charger
+  updates[ROOT + '/bl/' + base] = data;
+  updates[ROOT + '/tours/' + base + '/hasBL'] = true;
+  updates[ROOT + '/tours/' + base + '/blLe'] = Date.now();
+  db.ref().update(updates).then(function() { showToast('✅ Bon de livraison envoyé', true); })
+    .catch(function(e) { showToast('Échec de l\'envoi : ' + e.message); renderTour(); });
+}
+function voirBL() {
+  $('modalImg').removeAttribute('src');
+  $('photoModal').classList.remove('hidden');
+  db.ref(ROOT + '/bl/' + jourAffect + '/' + me.id + '/1').once('value').then(function(snap) {
+    if (snap.val()) $('modalImg').src = snap.val();
+    else { closePhoto(); showToast('Photo introuvable'); }
+  });
+}
+function closePhoto() { $('photoModal').classList.add('hidden'); }
 
 // Liste des centrales du formulaire du tour (centrales en service)
 function remplirCentrales() {
