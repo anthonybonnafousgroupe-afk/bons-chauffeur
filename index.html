@@ -105,6 +105,27 @@
   .tag.off { background: #fbe9d7; color: var(--warn); }
   .tag.ok { background: #e3f5ea; color: var(--ok); }
   .summary { font-size: 13px; color: var(--text-dim); margin: 6px 0 12px; }
+  .summary.export { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+  .filters { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 10px; }
+  .filters .field { margin-bottom: 0; }
+  .filters .full { grid-column: 1 / -1; }
+  .item-body { font-size: 14px; margin-top: 8px; display: flex; flex-direction: column; gap: 3px; }
+  .item-body b { font-weight: 600; }
+  .tag.saisi { background: #e3f5ea; color: var(--ok); }
+  .tag.asaisir { background: #fff4e0; color: var(--warn); }
+  .tag.encours { background: #e8f1fb; color: #1f5fa8; }
+  .item.est-saisi { border-left: 4px solid var(--ok); }
+  .item.a-saisir { border-left: 4px solid var(--warn); }
+  .item.en-cours { border-left: 4px solid #1f5fa8; }
+  .btn-ok { background: var(--ok); color: #fff; }
+  .saisi-info { font-size: 12px; color: var(--ok); font-weight: 600; }
+  .item-date { font-size: 12px; color: var(--text-dim); white-space: nowrap; text-align: right; }
+  .etapes { margin-top: 10px; border-top: 1px solid var(--border); }
+  .etapes summary { cursor: pointer; font-size: 13px; font-weight: 700; color: var(--red); padding: 8px 0 2px; }
+  .etape { font-size: 13px; padding: 8px 0; border-bottom: 1px solid var(--border); }
+  .etape:last-child { border-bottom: none; }
+  .etape b { font-weight: 700; }
+  .etape .btn { margin-top: 6px; }
   .tag.pris { background: #e3f5ea; color: var(--ok); }
 
   /* Camion du jour */
@@ -298,6 +319,23 @@
       <div id="centralesList"></div>
     </section>
 
+    <!-- Administration : journées des chauffeurs (tours, bons de livraison, lettres de voiture) -->
+    <section class="view" id="view-journees">
+      <h2>Journées</h2>
+      <div class="filters">
+        <div class="field"><select id="filtChauffeur" onchange="renderJournees()"><option value="">Tous les chauffeurs</option></select></div>
+        <div class="field"><input id="filtMois" type="month" onchange="renderJournees()"></div>
+        <div class="field"><input id="filtPlaque" class="plate-input" placeholder="Plaque" oninput="renderJournees()"></div>
+        <div class="field"><select id="filtEtat" onchange="renderJournees()"><option value="">Tous les états</option>
+          <option value="encours">🚚 En cours</option><option value="asaisir">🕓 À saisir</option><option value="saisi">✅ Saisies</option></select></div>
+      </div>
+      <div class="summary export">
+        <span id="journeesCount"></span>
+        <button class="btn btn-secondary btn-small" id="exportBtn" onclick="exportCsv()">⬇️ Export Excel (CSV)</button>
+      </div>
+      <div id="journeesList"></div>
+    </section>
+
     <!-- Administration : camions -->
     <section class="view" id="view-camions">
       <h2>Camions</h2>
@@ -316,6 +354,7 @@
 
   <nav class="nav hidden" id="nav">
     <button class="active" id="nav-accueil" onclick="showView('accueil')"><span class="ic">🏠</span>Accueil</button>
+    <button id="nav-journees" onclick="showView('journees')"><span class="ic">📋</span>Journées</button>
     <button id="nav-chauffeurs" onclick="showView('chauffeurs')"><span class="ic">👥</span>Chauffeurs</button>
     <button id="nav-camions" onclick="showView('camions')"><span class="ic">🚛</span>Camions</button>
     <button id="nav-centrales" onclick="showView('centrales')"><span class="ic">🏭</span>Centrales</button>
@@ -364,7 +403,7 @@
 <script>
 // ── Version ──────────────────────────────────────────────────────────────────
 // ⚠️ Changer ce numéro à chaque modification du code
-var APP_VERSION = '0.16';
+var APP_VERSION = '0.17';
 
 // ── Firebase ─────────────────────────────────────────────────────────────────
 // Même projet Firebase que Suivi Parc et Carburant, mais toutes les données
@@ -405,6 +444,7 @@ var journeeRef = null;
 var mesTours = {};      // tours du chauffeur aujourd'hui : { numero: { centrale, client, quantite, adresse, … } }
 var allCentrales = {};  // centrales à béton : { clé: { nom, adresse, lat, lng, provisoire } }
 var usersRef = null, camionsRef = null, affectRef = null, toursRef = null, centralesRef = null, finRef = null;
+var tousToursRef = null, toutesFinsRef = null, tousTours = {}, toutesFins = {};  // administrateur : toutes les journées
 var maFin = null;        // fin de journée du chauffeur : { hasLV, lvLe, … }
 var finOuvert = false;   // écran « Fin de journée » ouvert
 
@@ -554,6 +594,9 @@ function doLogout() {
   if (centralesRef) centralesRef.off();
   if (finRef) finRef.off();
   if (journeeRef) journeeRef.off();
+  if (tousToursRef) tousToursRef.off();
+  if (toutesFinsRef) toutesFinsRef.off();
+  tousTours = {}; toutesFins = {};
   maFin = null; finOuvert = false; maJournee = '';
   me = null; allUsers = {}; allCamions = {}; affectations = {}; mesTours = {}; allCentrales = {};
   $('loginPwd').value = '';
@@ -579,7 +622,7 @@ function startApp(u) {
 
 // ── Navigation ───────────────────────────────────────────────────────────────
 function showView(v) {
-  ['accueil', 'chauffeurs', 'camions', 'centrales'].forEach(function(n) {
+  ['accueil', 'journees', 'chauffeurs', 'camions', 'centrales'].forEach(function(n) {
     $('view-' + n).classList.toggle('active', n === v);
     $('nav-' + n).classList.toggle('active', n === v);
   });
@@ -639,7 +682,167 @@ document.addEventListener('visibilitychange', function() {
 
 function subscribeAdmin() {
   usersRef = db.ref(ROOT + '/users');
-  usersRef.on('value', function(snap) { allUsers = snap.val() || {}; renderUsers(); });
+  usersRef.on('value', function(snap) { allUsers = snap.val() || {}; renderUsers(); refreshChauffeurFilter(); renderJournees(); });
+  // Toutes les journées (sans les photos, rangées à part)
+  tousToursRef = db.ref(ROOT + '/tours');
+  tousToursRef.on('value', function(snap) { tousTours = snap.val() || {}; renderJournees(); });
+  toutesFinsRef = db.ref(ROOT + '/finJournee');
+  toutesFinsRef.on('value', function(snap) { toutesFins = snap.val() || {}; renderJournees(); });
+}
+
+// ── Administration : journées des chauffeurs ────────────────────────────────
+// Une journée = clé AAAA-MM-JJ (ou AAAA-MM-JJ-2… si le chauffeur en a fait plusieurs le même jour) + chauffeur
+function toutesJournees() {
+  var res = {};
+  [tousTours, toutesFins].forEach(function(src) {
+    Object.keys(src).forEach(function(jk) {
+      Object.keys(src[jk] || {}).forEach(function(cid) { res[jk + '|' + cid] = { jk: jk, cid: cid }; });
+    });
+  });
+  return Object.values(res).map(function(j) {
+    var et = (tousTours[j.jk] || {})[j.cid] || {}, fin = (toutesFins[j.jk] || {})[j.cid] || {};
+    var nums = Object.keys(et).map(Number).filter(function(n) { return et[n]; }).sort(function(a, b) { return a - b; });
+    var etapes = nums.map(function(n) { return Object.assign({ n: n }, et[n]); });
+    var tours = etapes.filter(function(e) { return e.type !== 'transfert'; });
+    var plaques = [];
+    etapes.concat([fin]).forEach(function(e) { if (e.plaque && plaques.indexOf(e.plaque) === -1) plaques.push(e.plaque); });
+    var u = allUsers[j.cid] || {};
+    return {
+      jk: j.jk, cid: j.cid, date: j.jk.slice(0, 10), rang: Number(j.jk.slice(11)) || 1, etapes: etapes, tours: tours, fin: fin, plaques: plaques,
+      nom: u.nom || (etapes[0] && etapes[0].chauffeurNom) || fin.chauffeurNom || j.cid,
+      m3: tours.reduce(function(s, e) { return s + (Number(e.quantite) || 0); }, 0),
+      eau: tours.reduce(function(s, e) { return s + (e.eauAjout ? Number(e.eauLitres) || 0 : 0); }, 0),
+      debut: etapes.length ? etapes[0].enregistreLe : fin.lvLe || 0,
+      terminee: !!fin.valideLe
+    };
+  }).sort(function(a, b) { return b.date.localeCompare(a.date) || b.debut - a.debut; });
+}
+function filteredJournees() {
+  var ch = $('filtChauffeur').value, mois = $('filtMois').value, pl = normPlaque($('filtPlaque').value), et = $('filtEtat').value;
+  return toutesJournees().filter(function(j) {
+    if (ch && j.cid !== ch) return false;
+    if (mois && j.date.slice(0, 7) !== mois) return false;
+    if (pl && !j.plaques.some(function(p) { return p.indexOf(pl) !== -1; })) return false;
+    if (et === 'encours' && j.terminee) return false;
+    if (et === 'asaisir' && (!j.terminee || j.fin.saisi)) return false;
+    if (et === 'saisi' && !j.fin.saisi) return false;
+    return true;
+  });
+}
+function fmtJour(d) {
+  var x = new Date(d + 'T12:00:00');
+  return x.toLocaleDateString('fr-FR', { weekday: 'short', day: '2-digit', month: '2-digit', year: 'numeric' });
+}
+function fmtNombre(v) { return String(Math.round(v * 100) / 100).replace('.', ','); }
+function refreshChauffeurFilter() {
+  var sel = $('filtChauffeur'), cur = sel.value;
+  sel.innerHTML = '<option value="">Tous les chauffeurs</option>' + Object.values(allUsers)
+    .filter(function(u) { return u.role === 'chauffeur' || !u.role; })
+    .sort(function(a, b) { return a.nom.localeCompare(b.nom); })
+    .map(function(u) { return '<option value="' + escHtml(u.id) + '">' + escHtml(u.nom) + '</option>'; }).join('');
+  sel.value = cur;
+}
+function renderJournees() {
+  if (!can('admin')) return;
+  var list = filteredJournees();
+  var nbASaisir = list.filter(function(j) { return j.terminee && !j.fin.saisi; }).length;
+  var nbEnCours = list.filter(function(j) { return !j.terminee; }).length;
+  $('journeesCount').textContent = list.length + ' journée' + (list.length > 1 ? 's' : '') + ' — ' + nbASaisir + ' à saisir' +
+    (nbEnCours ? ' — ' + nbEnCours + ' en cours' : '');
+  $('exportBtn').disabled = !list.length;
+  if (!list.length) { $('journeesList').innerHTML = '<div class="empty">Aucune journée enregistrée</div>'; return; }
+  $('journeesList').innerHTML = list.slice(0, 300).map(function(j) {
+    var k = "'" + escHtml(j.jk) + "','" + escHtml(j.cid) + "'";
+    var nbX = j.etapes.length - j.tours.length;
+    return '<div class="item ' + (!j.terminee ? 'en-cours' : j.fin.saisi ? 'est-saisi' : 'a-saisir') + '">' +
+      '<div class="item-head"><span>' + j.plaques.map(function(p) { return '<span class="plaque" style="font-size:13px">' + escHtml(p) + '</span>'; }).join(' ') +
+        (!j.terminee ? ' <span class="tag encours">🚚 En cours</span>' : j.fin.saisi ? ' <span class="tag saisi">✅ Saisie</span>' : ' <span class="tag asaisir">🕓 À saisir</span>') +
+      '</span><span class="item-date">' + fmtJour(j.date) + (j.rang > 1 ? '<br>' + j.rang + 'e journée' : '') + '</span></div>' +
+      '<div class="item-body">' +
+        '<div>👤 <b>' + escHtml(j.nom) + '</b></div>' +
+        '<div>🔁 ' + j.tours.length + ' tour' + (j.tours.length > 1 ? 's' : '') + ' — <b>' + fmtNombre(j.m3) + ' m³</b>' +
+          (nbX ? ' — 🔄 ' + nbX + ' transfert' + (nbX > 1 ? 's' : '') : '') + '</div>' +
+        (j.eau ? '<div>💧 ' + fmtNombre(j.eau) + ' L d\'eau ajoutés</div>' : '') +
+        '<div>' + (j.terminee ? '🏁 Fin de journée validée à ' + heure(j.fin.valideLe) : '🚚 Journée en cours') +
+          (j.fin.hasLV ? '' : ' — lettre de voiture pas encore envoyée') + '</div>' +
+        (j.fin.saisi ? '<div class="saisi-info">✅ Saisie par ' + escHtml(j.fin.saisiPar || '?') + (j.fin.saisiLe ? ' le ' + new Date(j.fin.saisiLe).toLocaleDateString('fr-FR') : '') + '</div>' : '') +
+      '</div>' +
+      (j.etapes.length ? '<details class="etapes"><summary>Détail des tours</summary>' + j.etapes.map(function(e) {
+        if (e.type === 'transfert') return '<div class="etape">🔄 <b>Transfert</b> ' + escHtml(e.depart) + ' → ' + escHtml(e.arrivee) +
+          ' <span class="item-sub">(' + heure(e.enregistreLe) + ')</span></div>';
+        return '<div class="etape"><b>' + ordinal(e.numero || 1) + ' tour</b> — ' + escHtml(e.centrale) + ' → <b>' + escHtml(e.client) + '</b> — ' + escHtml(fmtQte(e.quantite)) +
+          '<div class="item-sub">' + escHtml(e.adresse) + ' — ' + escHtml(e.zone || '') + (e.distanceKm != null ? ' (' + fmtKm(e.distanceKm) + ')' : '') +
+          ' — ' + (e.eauAjout ? '💧 ' + fmtNombre(e.eauLitres) + ' L' : 'sans eau') + ' — ' + heure(e.enregistreLe) + '</div>' +
+          (e.hasBL ? '<button class="btn btn-secondary btn-small" onclick="voirPhoto(\'/bl/' + escHtml(j.jk) + '/' + escHtml(j.cid) + '/' + e.n + '\')">🧾 Bon de livraison</button>'
+                   : '<div class="item-sub" style="color:var(--warn)">Bon de livraison pas encore envoyé</div>') + '</div>';
+      }).join('') + '</details>' : '') +
+      '<div class="item-actions">' +
+        (j.fin.hasLV ? '<button class="btn btn-secondary btn-small" onclick="voirPhoto(\'/lv/' + escHtml(j.jk) + '/' + escHtml(j.cid) + '\')">🧾 Lettre de voiture</button>' : '') +
+        (j.terminee ? (j.fin.saisi
+          ? '<button class="btn btn-secondary btn-small" onclick="setSaisi(' + k + ', false)">↩️ Remettre à saisir</button>'
+          : '<button class="btn btn-ok btn-small" onclick="setSaisi(' + k + ', true)">✅ Marquer saisie</button>') : '') +
+        '<button class="btn btn-danger btn-small" onclick="deleteJournee(' + k + ')">🗑️ Supprimer</button>' +
+      '</div></div>';
+  }).join('') + (list.length > 300 ? '<div class="empty">300 premières affichées — affinez les filtres</div>' : '');
+}
+function voirPhoto(chemin) {
+  $('modalImg').removeAttribute('src');
+  $('photoModal').classList.remove('hidden');
+  db.ref(ROOT + chemin).once('value').then(function(snap) {
+    if (snap.val()) $('modalImg').src = snap.val();
+    else { closePhoto(); showToast('Photo introuvable'); }
+  });
+}
+// État comptable : la journée a été saisie par le bureau
+function setSaisi(jk, cid, saisi) {
+  if (!saisi) {
+    confirmer('Remettre cette journée en « À saisir » ?', { ok: 'Remettre à saisir' }, function() { ecrireSaisi(jk, cid, false); });
+  } else {
+    ecrireSaisi(jk, cid, true);
+  }
+}
+function ecrireSaisi(jk, cid, saisi) {
+  db.ref(ROOT + '/finJournee/' + jk + '/' + cid).update(saisi
+    ? { saisi: true, saisiPar: me.nom, saisiLe: Date.now() }
+    : { saisi: null, saisiPar: null, saisiLe: null }
+  ).then(function() { showToast(saisi ? '✅ Marquée comme saisie' : 'Remise à saisir', saisi); })
+   .catch(function(e) { showToast('Erreur : ' + e.message); });
+}
+function deleteJournee(jk, cid) {
+  var nom = (allUsers[cid] || {}).nom || cid;
+  confirmer('Supprimer définitivement la journée du ' + fmtJour(jk.slice(0, 10)) + ' de ' + nom + ', avec ses bons et sa lettre de voiture ?', { ok: 'Supprimer', danger: true }, function() {
+    var updates = {};
+    ['tours', 'bl', 'lv', 'finJournee'].forEach(function(d) { updates[ROOT + '/' + d + '/' + jk + '/' + cid] = null; });
+    db.ref().update(updates).then(function() { showToast('Journée supprimée'); });
+  });
+}
+// Une ligne par tour ou transfert
+function exportCsv() {
+  var rows = [['Date', 'Journée', 'Chauffeur', 'Plaque', 'Étape', 'Centrale de départ', 'Client', 'Quantité (m³)', 'Adresse de livraison', 'Zone',
+    'Distance (km)', 'Rajout d\'eau (L)', 'Bon de livraison', 'Centrale d\'arrivée (transfert)', 'Heure', 'Lettre de voiture', 'Fin de journée', 'État', 'Saisie par', 'Saisie le']];
+  filteredJournees().slice().reverse().forEach(function(j) {
+    var commun = function(e) {
+      return [new Date(j.date + 'T12:00:00').toLocaleDateString('fr-FR'), j.rang, j.nom, e.plaque || j.plaques.join(' ')];
+    };
+    var fin = [j.fin.hasLV ? 'Envoyée' : 'Non envoyée', j.terminee ? heure(j.fin.valideLe) : 'En cours',
+      !j.terminee ? 'En cours' : j.fin.saisi ? 'Saisie' : 'À saisir', j.fin.saisiPar || '', j.fin.saisiLe ? new Date(j.fin.saisiLe).toLocaleDateString('fr-FR') : ''];
+    if (!j.etapes.length) rows.push(commun({}).concat(['', '', '', '', '', '', '', '', '', '', '']).concat(fin));
+    j.etapes.forEach(function(e) {
+      rows.push(commun(e).concat(e.type === 'transfert'
+        ? ['Transfert', e.depart, '', '', '', '', '', '', '', e.arrivee, heure(e.enregistreLe)]
+        : [ordinal(e.numero || 1) + ' tour', e.centrale, e.client, fmtNombre(e.quantite), e.adresse, e.zone || '',
+           e.distanceKm != null ? fmtNombre(e.distanceKm) : '', e.eauAjout ? fmtNombre(e.eauLitres) : '0', e.hasBL ? 'Envoyé' : 'Non envoyé', '', heure(e.enregistreLe)]
+      ).concat(fin));
+    });
+  });
+  // Point-virgule + BOM : s'ouvre directement dans Excel français
+  var csv = '\ufeff' + rows.map(function(r) {
+    return r.map(function(c) { return '"' + String(c).replace(/"/g, '""') + '"'; }).join(';');
+  }).join('\r\n');
+  var a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
+  a.download = 'bons-chauffeur_' + new Date().toISOString().slice(0, 10) + '.csv';
+  document.body.appendChild(a); a.click(); a.remove();
 }
 
 // ── Chauffeur : camion du jour ───────────────────────────────────────────────
