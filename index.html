@@ -34,11 +34,12 @@
 
   .field { margin-bottom: 14px; }
   .field label { font-size: 12px; font-weight: 600; color: var(--text-dim); display: block; margin-bottom: 6px; }
-  .field input, .field select {
+  .field input, .field select, .field textarea {
     width: 100%; padding: 13px 14px; font-size: 16px; font-family: inherit; border: 1.5px solid var(--border);
     border-radius: 10px; background: #fafafa; color: var(--text); outline: none; -webkit-appearance: none; appearance: none;
   }
-  .field input:focus, .field select:focus { border-color: var(--red); background: #fff; }
+  .field textarea { resize: vertical; min-height: 70px; }
+  .field input:focus, .field select:focus, .field textarea:focus { border-color: var(--red); background: #fff; }
   .field select, .field select:focus { padding-right: 38px; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8'%3E%3Cpath d='M1 1l5 5 5-5' stroke='%23888' stroke-width='2' fill='none'/%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: right 14px center; }
   .field .hint { font-size: 12px; color: var(--text-dim); margin-top: 5px; }
   .field .hint.warn { color: var(--warn); font-weight: 600; }
@@ -148,6 +149,9 @@
   .suite-btns { display: flex; flex-direction: column; gap: 10px; }
   .suite-btns .btn { font-size: 17px; padding: 16px; }
   .btn-fin { background: #1f2933; color: #fff; }
+  .suite-btns .btn.verrou { opacity: .45; }
+  .suite-attente { background: #fff4e0; color: var(--warn); border-radius: 10px; padding: 10px 12px; font-size: 14px; font-weight: 700; text-align: center; }
+  .ligne.comm b { font-weight: 500; font-style: italic; white-space: pre-wrap; }
   .fin-resume { font-size: 14px; color: var(--text-dim); text-align: center; margin-bottom: 4px; }
   .bl-zone { margin-top: 14px; border: 2px dashed var(--red-mid); border-radius: var(--radius); background: var(--red-light); text-align: center;
     padding: 18px 12px; cursor: pointer; color: var(--red); font-weight: 700; }
@@ -254,6 +258,7 @@
             <div class="hint" id="adresseHint"></div></div>
           <div class="field"><label>Zone *</label><select id="tZone"></select>
             <div class="hint" id="zoneHint"></div></div>
+          <div class="field"><label>Commentaire</label><textarea id="tComm" rows="3" maxlength="500" placeholder="Facultatif — ex : accès difficile, attente sur chantier…"></textarea></div>
           <div class="input-row">
             <button class="btn btn-secondary" style="flex:1" onclick="fermerTour()">Annuler</button>
             <button class="btn btn-primary" style="flex:2" id="tourSaveBtn" onclick="enregistrerTour()">✅ Valider le 1er tour</button>
@@ -263,6 +268,7 @@
           <div class="form-titre">🔄 Transfert vers autre centrale</div>
           <div class="field"><label>Centrale de départ *</label><select id="trDepart"></select></div>
           <div class="field"><label>Centrale d'arrivée *</label><select id="trArrivee"></select></div>
+          <div class="field"><label>Commentaire</label><textarea id="trComm" rows="3" maxlength="500" placeholder="Facultatif"></textarea></div>
           <div class="input-row">
             <button class="btn btn-secondary" style="flex:1" onclick="fermerTour()">Annuler</button>
             <button class="btn btn-primary" style="flex:2" id="transfertSaveBtn" onclick="enregistrerTransfert()">✅ Valider le transfert</button>
@@ -272,9 +278,10 @@
       <!-- Chauffeur : suite de la journée une fois le tour enregistré -->
       <div class="card hidden" style="max-width:none;margin-bottom:16px" id="suiteCard">
         <div class="suite-btns">
-          <button class="btn btn-primary" onclick="tourSuivant()">➕ Tour suivant</button>
+          <div class="suite-attente hidden" id="suiteAttente"></div>
+          <button class="btn btn-primary" id="tourSuivantBtn" onclick="tourSuivant()">➕ Tour suivant</button>
           <button class="btn btn-secondary" onclick="transfertCentrale()">➕ Transfert vers autre centrale</button>
-          <button class="btn btn-fin" onclick="ouvrirFinJournee()">🏁 Fin de journée</button>
+          <button class="btn btn-fin" id="finJourneeBtn" onclick="ouvrirFinJournee()">🏁 Fin de journée</button>
         </div>
       </div>
       <!-- Chauffeur : fin de journée, photo de la lettre de voiture journalière -->
@@ -403,7 +410,7 @@
 <script>
 // ── Version ──────────────────────────────────────────────────────────────────
 // ⚠️ Changer ce numéro à chaque modification du code
-var APP_VERSION = '0.17';
+var APP_VERSION = '0.18';
 
 // ── Firebase ─────────────────────────────────────────────────────────────────
 // Même projet Firebase que Suivi Parc et Carburant, mais toutes les données
@@ -768,11 +775,12 @@ function renderJournees() {
         (j.fin.saisi ? '<div class="saisi-info">✅ Saisie par ' + escHtml(j.fin.saisiPar || '?') + (j.fin.saisiLe ? ' le ' + new Date(j.fin.saisiLe).toLocaleDateString('fr-FR') : '') + '</div>' : '') +
       '</div>' +
       (j.etapes.length ? '<details class="etapes"><summary>Détail des tours</summary>' + j.etapes.map(function(e) {
+        var comm = e.commentaire ? '<div class="item-sub">💬 <i>' + escHtml(e.commentaire) + '</i></div>' : '';
         if (e.type === 'transfert') return '<div class="etape">🔄 <b>Transfert</b> ' + escHtml(e.depart) + ' → ' + escHtml(e.arrivee) +
-          ' <span class="item-sub">(' + heure(e.enregistreLe) + ')</span></div>';
+          ' <span class="item-sub">(' + heure(e.enregistreLe) + ')</span>' + comm + '</div>';
         return '<div class="etape"><b>' + ordinal(e.numero || 1) + ' tour</b> — ' + escHtml(e.centrale) + ' → <b>' + escHtml(e.client) + '</b> — ' + escHtml(fmtQte(e.quantite)) +
           '<div class="item-sub">' + escHtml(e.adresse) + ' — ' + escHtml(e.zone || '') + (e.distanceKm != null ? ' (' + fmtKm(e.distanceKm) + ')' : '') +
-          ' — ' + (e.eauAjout ? '💧 ' + fmtNombre(e.eauLitres) + ' L' : 'sans eau') + ' — ' + heure(e.enregistreLe) + '</div>' +
+          ' — ' + (e.eauAjout ? '💧 ' + fmtNombre(e.eauLitres) + ' L' : 'sans eau') + ' — ' + heure(e.enregistreLe) + '</div>' + comm +
           (e.hasBL ? '<button class="btn btn-secondary btn-small" onclick="voirPhoto(\'/bl/' + escHtml(j.jk) + '/' + escHtml(j.cid) + '/' + e.n + '\')">🧾 Bon de livraison</button>'
                    : '<div class="item-sub" style="color:var(--warn)">Bon de livraison pas encore envoyé</div>') + '</div>';
       }).join('') + '</details>' : '') +
@@ -819,19 +827,19 @@ function deleteJournee(jk, cid) {
 // Une ligne par tour ou transfert
 function exportCsv() {
   var rows = [['Date', 'Journée', 'Chauffeur', 'Plaque', 'Étape', 'Centrale de départ', 'Client', 'Quantité (m³)', 'Adresse de livraison', 'Zone',
-    'Distance (km)', 'Rajout d\'eau (L)', 'Bon de livraison', 'Centrale d\'arrivée (transfert)', 'Heure', 'Lettre de voiture', 'Fin de journée', 'État', 'Saisie par', 'Saisie le']];
+    'Distance (km)', 'Rajout d\'eau (L)', 'Bon de livraison', 'Centrale d\'arrivée (transfert)', 'Heure', 'Commentaire', 'Lettre de voiture', 'Fin de journée', 'État', 'Saisie par', 'Saisie le']];
   filteredJournees().slice().reverse().forEach(function(j) {
     var commun = function(e) {
       return [new Date(j.date + 'T12:00:00').toLocaleDateString('fr-FR'), j.rang, j.nom, e.plaque || j.plaques.join(' ')];
     };
     var fin = [j.fin.hasLV ? 'Envoyée' : 'Non envoyée', j.terminee ? heure(j.fin.valideLe) : 'En cours',
       !j.terminee ? 'En cours' : j.fin.saisi ? 'Saisie' : 'À saisir', j.fin.saisiPar || '', j.fin.saisiLe ? new Date(j.fin.saisiLe).toLocaleDateString('fr-FR') : ''];
-    if (!j.etapes.length) rows.push(commun({}).concat(['', '', '', '', '', '', '', '', '', '', '']).concat(fin));
+    if (!j.etapes.length) rows.push(commun({}).concat(['', '', '', '', '', '', '', '', '', '', '', '']).concat(fin));
     j.etapes.forEach(function(e) {
       rows.push(commun(e).concat(e.type === 'transfert'
-        ? ['Transfert', e.depart, '', '', '', '', '', '', '', e.arrivee, heure(e.enregistreLe)]
+        ? ['Transfert', e.depart, '', '', '', '', '', '', '', e.arrivee, heure(e.enregistreLe), e.commentaire || '']
         : [ordinal(e.numero || 1) + ' tour', e.centrale, e.client, fmtNombre(e.quantite), e.adresse, e.zone || '',
-           e.distanceKm != null ? fmtNombre(e.distanceKm) : '', e.eauAjout ? fmtNombre(e.eauLitres) : '0', e.hasBL ? 'Envoyé' : 'Non envoyé', '', heure(e.enregistreLe)]
+           e.distanceKm != null ? fmtNombre(e.distanceKm) : '', e.eauAjout ? fmtNombre(e.eauLitres) : '0', e.hasBL ? 'Envoyé' : 'Non envoyé', '', heure(e.enregistreLe), e.commentaire || '']
       ).concat(fin));
     });
   });
@@ -1131,6 +1139,11 @@ function renderTour() {
   $('suiteCard').classList.toggle('hidden', !etapes.length || !!f || fin);
   $('finCard').classList.toggle('hidden', !fin);
   if (fin) renderFin(etapes);
+  var manque = tourSansBL();
+  $('suiteAttente').classList.toggle('hidden', !manque);
+  if (manque) $('suiteAttente').textContent = '📷 Envoyez la photo du bon de livraison du ' + ordinal(mesTours[manque].numero || 1) + ' tour pour continuer';
+  $('tourSuivantBtn').classList.toggle('verrou', !!manque);
+  $('finJourneeBtn').classList.toggle('verrou', !!manque);
   $('bientotCard').classList.toggle('hidden', !!etapes.length);
   if (!camion) return;
   $('tourSelField').classList.toggle('hidden', !!etapes.length);
@@ -1145,6 +1158,7 @@ function renderTour() {
   $('tourFait').innerHTML = etapes.filter(function(n) { return !(f && f.edition && f.n === n); }).map(resumeEtape).join('');
 }
 
+function ligneComm(e) { return e.commentaire ? '<div class="ligne comm"><span>Commentaire</span><b>' + escHtml(e.commentaire) + '</b></div>' : ''; }
 function resumeEtape(n) {
   var tour = mesTours[n];
   var pied = '<div class="item-sub">Enregistré à ' + heure(tour.enregistreLe) + ' — <span class="plaque" style="font-size:12px">' + escHtml(tour.plaque) + '</span></div>' +
@@ -1152,7 +1166,7 @@ function resumeEtape(n) {
   if (tour.type === 'transfert') {
     return '<div class="tour-fait transfert"><div class="num">🔄 Transfert vers autre centrale</div>' +
       '<div class="ligne"><span>Départ</span><b>' + escHtml(tour.depart) + '</b></div>' +
-      '<div class="ligne"><span>Arrivée</span><b>' + escHtml(tour.arrivee) + '</b></div>' + pied + '</div>';
+      '<div class="ligne"><span>Arrivée</span><b>' + escHtml(tour.arrivee) + '</b></div>' + ligneComm(tour) + pied + '</div>';
   }
   return '<div class="tour-fait"><div class="num">' + ordinal(tour.numero || 1) + ' tour</div>' +
     '<div class="ligne"><span>Centrale</span><b>' + escHtml(tour.centrale) + '</b></div>' +
@@ -1163,6 +1177,7 @@ function resumeEtape(n) {
     (tour.distanceKm != null ? '<div class="ligne"><span>Distance</span><b>' + fmtKm(tour.distanceKm) + ' (≈ ' + fmtMin(tour.dureeMin) + ')</b></div>' : '') +
     '<div class="ligne"><span>Zone</span><b>' + escHtml(tour.zone || '—') + '</b></div>' +
     '<div class="ligne"><span>Eau</span><b>' + (tour.eauAjout ? '💧 Oui — ' + escHtml(String(tour.eauLitres).replace('.', ',')) + ' L' : 'Pas de rajout') + '</b></div>' +
+    ligneComm(tour) +
     pied +
     (tour.hasBL
       ? '<div class="bl-ok">✅ Bon de livraison envoyé à ' + heure(tour.blLe) +
@@ -1173,7 +1188,19 @@ function resumeEtape(n) {
     '</div>';
 }
 
+// Premier tour dont la photo du bon de livraison n'est pas encore envoyée (bloque la suite)
+function tourSansBL() {
+  return etapesTriees().filter(function(n) { return !estTransfert(n) && !mesTours[n].hasBL; })[0] || null;
+}
+function blManquant() {
+  var n = tourSansBL();
+  if (!n) return false;
+  showToast('Envoyez d\'abord la photo du bon de livraison du ' + ordinal(mesTours[n].numero || 1) + ' tour');
+  allerAuFormulaire('blZone' + n);
+  return true;
+}
 function viderFormTour() {
+  $('tComm').value = '';
   ['tClient', 'tQte', 'tAdresse'].forEach(function(f) { $(f).value = ''; });
   $('tCentrale').value = ''; $('tZone').value = '';
   gpsPos = null; gpsAdresse = ''; distInfo = null; $('adresseHint').textContent = ''; $('zoneHint').textContent = '';
@@ -1187,7 +1214,7 @@ function ouvrirFormTour(n, edition) {
   remplirCentrales();
   renderTour();
 }
-function allerAuFormulaire(id) { setTimeout(function() { $(id).scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 50); }
+function allerAuFormulaire(id) { setTimeout(function() { if ($(id)) $(id).scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 50); }
 
 // Le 1er tour est sélectionné : le formulaire s'ouvre
 function ouvrirTour() {
@@ -1197,6 +1224,7 @@ function ouvrirTour() {
 }
 // « Tour suivant » : même formulaire, centrale pré-remplie avec celle où se trouve le camion
 function tourSuivant() {
+  if (blManquant()) return;
   viderFormTour();
   ouvrirFormTour(prochaineEtape(), false);
   $('tCentrale').value = centraleActuelle();
@@ -1206,7 +1234,7 @@ function tourSuivant() {
 function transfertCentrale() {
   etapeForm = { n: prochaineEtape(), type: 'transfert', edition: false };
   remplirCentrales();
-  $('trDepart').value = centraleActuelle(); $('trArrivee').value = '';
+  $('trDepart').value = centraleActuelle(); $('trArrivee').value = ''; $('trComm').value = '';
   renderTour();
   allerAuFormulaire('transfertForm');
 }
@@ -1221,7 +1249,7 @@ function modifierEtape(n) {
   if (tour.type === 'transfert') {
     etapeForm = { n: n, type: 'transfert', edition: true };
     remplirCentrales();
-    $('trDepart').value = tour.depart; $('trArrivee').value = tour.arrivee;
+    $('trDepart').value = tour.depart; $('trArrivee').value = tour.arrivee; $('trComm').value = tour.commentaire || '';
     renderTour(); allerAuFormulaire('transfertForm');
     return;
   }
@@ -1229,7 +1257,7 @@ function modifierEtape(n) {
   ouvrirFormTour(n, true);
   $('tCentrale').value = tour.centrale; $('tClient').value = tour.client;
   $('tQte').value = String(tour.quantite).replace('.', ','); $('tAdresse').value = tour.adresse;
-  $('tZone').value = tour.zone || '';
+  $('tZone').value = tour.zone || ''; $('tComm').value = tour.commentaire || '';
   distInfo = tour.distanceKm != null ? { centrale: tour.centrale, adresse: tour.adresse, km: tour.distanceKm, min: tour.dureeMin } : null;
   $('zoneHint').className = 'hint' + (distInfo ? ' ok' : '');
   $('zoneHint').textContent = distInfo ? '🛣️ ' + fmtKm(distInfo.km) + ' depuis ' + distInfo.centrale + ' (≈ ' + fmtMin(distInfo.min) + ')' : '';
@@ -1258,7 +1286,7 @@ function ecrireTour(f, avant, centrale, client, qte, adresse, zone, eau) {
     type: 'tour', numero: numero, plaque: monCamion(), chauffeurId: me.id, chauffeurNom: me.nom,
     centrale: centrale, client: client, quantite: qte, adresse: adresse, zone: zone, gps: gpsPos && gpsAdresse === adresse ? gpsPos : (avant && avant.adresse === adresse && avant.gps) || null,
     distanceKm: distOk ? distInfo.km : null, dureeMin: distOk ? distInfo.min : null,
-    eauAjout: eau.ajout, eauLitres: eau.ajout ? eau.litres : null,
+    eauAjout: eau.ajout, eauLitres: eau.ajout ? eau.litres : null, commentaire: $('tComm').value.trim() || null,
     hasBL: !!(avant && avant.hasBL), blLe: (avant && avant.blLe) || null,
     enregistreLe: avant ? avant.enregistreLe : Date.now(), modifieLe: avant ? Date.now() : null
   }).then(function() {
@@ -1280,7 +1308,7 @@ function enregistrerTransfert() {
   btn.disabled = true;
   db.ref(ROOT + '/tours/' + maJournee + '/' + me.id + '/' + f.n).set({
     type: 'transfert', plaque: monCamion(), chauffeurId: me.id, chauffeurNom: me.nom,
-    depart: depart, arrivee: arrivee,
+    depart: depart, arrivee: arrivee, commentaire: $('trComm').value.trim() || null,
     enregistreLe: avant ? avant.enregistreLe : Date.now(), modifieLe: avant ? Date.now() : null
   }).then(function() {
     showToast(avant ? '✅ Transfert modifié' : '✅ Transfert enregistré', true);
@@ -1316,7 +1344,7 @@ function validerEau() {
 // ── Photo du bon de livraison ────────────────────────────────────────────────
 // Redimensionnée et compressée pour rester légère mais lisible
 // ── Fin de journée : photo de la lettre de voiture journalière ──────────────
-function ouvrirFinJournee() { finOuvert = true; renderTour(); allerAuFormulaire('finCard'); }
+function ouvrirFinJournee() { if (blManquant()) return; finOuvert = true; renderTour(); allerAuFormulaire('finCard'); }
 function fermerFinJournee() { finOuvert = false; renderTour(); }
 function renderFin(etapes) {
   var nbT = etapes.filter(function(n) { return !estTransfert(n); }).length, nbX = etapes.length - nbT;
