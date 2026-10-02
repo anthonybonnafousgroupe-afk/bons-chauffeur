@@ -294,7 +294,7 @@
 <script>
 // ── Version ──────────────────────────────────────────────────────────────────
 // ⚠️ Changer ce numéro à chaque modification du code
-var APP_VERSION = '0.10';
+var APP_VERSION = '0.11';
 
 // ── Firebase ─────────────────────────────────────────────────────────────────
 // Même projet Firebase que Suivi Parc et Carburant, mais toutes les données
@@ -601,19 +601,19 @@ function prendreCamion() {
 
 // ── Chauffeur : 1er tour ─────────────────────────────────────────────────────
 var ZONES = ['Zone 1', 'Zone 2', 'Zone 3', 'Zone 4', 'Zone 5', 'Zone 6', 'Hors zone'];
-// Liste de départ, créée une seule fois dans l'onglet Centrales (positions provisoires :
-// centre-ville de chaque commune, à corriger par l'administrateur)
+// Liste de départ, créée une seule fois dans l'onglet Centrales (positions relevées
+// par l'administrateur le 02/10/2026, modifiables ensuite dans l'onglet)
 var CENTRALES_DEPART = [
-  ['Rodez', 44.3506, 2.5750], ['Salles-Curan', 44.1817, 2.7869], ['Millau', 44.0980, 3.0778],
-  ['Réquista', 44.0336, 2.5358], ['Saint-Affrique', 43.9586, 2.8869], ['Villefranche-de-Rouergue', 44.3517, 2.0350],
-  ['Mende', 44.5181, 3.5006], ['Sévérac-le-Château', 44.3222, 3.0717]
+  ['Mende', 44.524754, 3.523164], ['Millau', 44.079183, 3.044852], ['Réquista', 44.03513, 2.518614],
+  ['Rodez', 44.391331, 2.593813], ['Saint-Affrique', 43.961034, 2.859661], ['Salles-Curan', 44.172658, 2.790181],
+  ['Sévérac-le-Château', 44.331674, 3.06371], ['Villefranche-de-Rouergue', 44.334181, 2.020477]
 ];
 function initCentrales() {
   db.ref(ROOT + '/reglages/centralesCreees').once('value').then(function(s) {
     if (s.val()) return;
     var updates = {};
     CENTRALES_DEPART.forEach(function(c) {
-      updates[ROOT + '/centrales/' + db.ref(ROOT + '/centrales').push().key] = { nom: c[0], adresse: '', lat: c[1], lng: c[2], provisoire: true, actif: true };
+      updates[ROOT + '/centrales/' + db.ref(ROOT + '/centrales').push().key] = { nom: c[0], adresse: '', lat: c[1], lng: c[2], provisoire: false, actif: true };
     });
     updates[ROOT + '/reglages/centralesCreees'] = true;
     return db.ref().update(updates);
