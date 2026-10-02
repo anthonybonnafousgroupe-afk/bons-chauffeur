@@ -289,6 +289,15 @@
         <div class="card-title">🏁 Fin de journée</div>
         <div id="finContenu"></div>
       </div>
+      <!-- Chauffeur : historique de ses journées passées -->
+      <div class="card hidden" style="max-width:none;margin-bottom:16px" id="histoCard">
+        <button class="btn btn-secondary" id="histoBtn" onclick="basculerHisto()">📅 Voir mes journées passées</button>
+        <div class="hidden" id="histoZone" style="margin-top:14px">
+          <div class="field"><label>Mois</label><input id="histoMois" type="month" onchange="renderHisto()"></div>
+          <div class="summary" id="histoCount"></div>
+          <div id="histoList"></div>
+        </div>
+      </div>
       <div class="card" style="max-width:none" id="bientotCard"><div class="empty">Les autres écrans de l'application arrivent bientôt.</div></div>
     </section>
 
@@ -410,7 +419,7 @@
 <script>
 // ── Version ──────────────────────────────────────────────────────────────────
 // ⚠️ Changer ce numéro à chaque modification du code
-var APP_VERSION = '0.18';
+var APP_VERSION = '0.19';
 
 // ── Firebase ─────────────────────────────────────────────────────────────────
 // Même projet Firebase que Suivi Parc et Carburant, mais toutes les données
@@ -605,6 +614,9 @@ function doLogout() {
   if (toutesFinsRef) toutesFinsRef.off();
   tousTours = {}; toutesFins = {};
   maFin = null; finOuvert = false; maJournee = '';
+  histoOuvert = false; histoJournees = [];
+  $('histoBtn').textContent = '📅 Voir mes journées passées'; $('histoZone').classList.add('hidden'); $('histoCard').classList.add('hidden');
+  $('bientotCard').classList.remove('hidden');
   me = null; allUsers = {}; allCamions = {}; affectations = {}; mesTours = {}; allCentrales = {};
   $('loginPwd').value = '';
   showScreen('loginScreen');
@@ -699,15 +711,16 @@ function subscribeAdmin() {
 
 // ── Administration : journées des chauffeurs ────────────────────────────────
 // Une journée = clé AAAA-MM-JJ (ou AAAA-MM-JJ-2… si le chauffeur en a fait plusieurs le même jour) + chauffeur
-function toutesJournees() {
+function toutesJournees(srcTours, srcFins) {
+  srcTours = srcTours || tousTours; srcFins = srcFins || toutesFins;
   var res = {};
-  [tousTours, toutesFins].forEach(function(src) {
+  [srcTours, srcFins].forEach(function(src) {
     Object.keys(src).forEach(function(jk) {
       Object.keys(src[jk] || {}).forEach(function(cid) { res[jk + '|' + cid] = { jk: jk, cid: cid }; });
     });
   });
   return Object.values(res).map(function(j) {
-    var et = (tousTours[j.jk] || {})[j.cid] || {}, fin = (toutesFins[j.jk] || {})[j.cid] || {};
+    var et = (srcTours[j.jk] || {})[j.cid] || {}, fin = (srcFins[j.jk] || {})[j.cid] || {};
     var nums = Object.keys(et).map(Number).filter(function(n) { return et[n]; }).sort(function(a, b) { return a - b; });
     var etapes = nums.map(function(n) { return Object.assign({ n: n }, et[n]); });
     var tours = etapes.filter(function(e) { return e.type !== 'transfert'; });
@@ -758,21 +771,25 @@ function renderJournees() {
     (nbEnCours ? ' — ' + nbEnCours + ' en cours' : '');
   $('exportBtn').disabled = !list.length;
   if (!list.length) { $('journeesList').innerHTML = '<div class="empty">Aucune journée enregistrée</div>'; return; }
-  $('journeesList').innerHTML = list.slice(0, 300).map(function(j) {
+  $('journeesList').innerHTML = list.slice(0, 300).map(function(j) { return carteJournee(j, true); }).join('') +
+    (list.length > 300 ? '<div class="empty">300 premières affichées — affinez les filtres</div>' : '');
+}
+// Fiche d'une journée : vue administrateur (saisie, suppression) ou vue chauffeur (historique, consultation seule)
+function carteJournee(j, admin) {
     var k = "'" + escHtml(j.jk) + "','" + escHtml(j.cid) + "'";
     var nbX = j.etapes.length - j.tours.length;
-    return '<div class="item ' + (!j.terminee ? 'en-cours' : j.fin.saisi ? 'est-saisi' : 'a-saisir') + '">' +
+    return '<div class="item ' + (!j.terminee ? 'en-cours' : !admin || j.fin.saisi ? 'est-saisi' : 'a-saisir') + '">' +
       '<div class="item-head"><span>' + j.plaques.map(function(p) { return '<span class="plaque" style="font-size:13px">' + escHtml(p) + '</span>'; }).join(' ') +
-        (!j.terminee ? ' <span class="tag encours">🚚 En cours</span>' : j.fin.saisi ? ' <span class="tag saisi">✅ Saisie</span>' : ' <span class="tag asaisir">🕓 À saisir</span>') +
+        (!j.terminee ? ' <span class="tag encours">🚚 En cours</span>' : !admin ? ' <span class="tag saisi">✅ Terminée</span>' : j.fin.saisi ? ' <span class="tag saisi">✅ Saisie</span>' : ' <span class="tag asaisir">🕓 À saisir</span>') +
       '</span><span class="item-date">' + fmtJour(j.date) + (j.rang > 1 ? '<br>' + j.rang + 'e journée' : '') + '</span></div>' +
       '<div class="item-body">' +
-        '<div>👤 <b>' + escHtml(j.nom) + '</b></div>' +
+        (admin ? '<div>👤 <b>' + escHtml(j.nom) + '</b></div>' : '') +
         '<div>🔁 ' + j.tours.length + ' tour' + (j.tours.length > 1 ? 's' : '') + ' — <b>' + fmtNombre(j.m3) + ' m³</b>' +
           (nbX ? ' — 🔄 ' + nbX + ' transfert' + (nbX > 1 ? 's' : '') : '') + '</div>' +
         (j.eau ? '<div>💧 ' + fmtNombre(j.eau) + ' L d\'eau ajoutés</div>' : '') +
         '<div>' + (j.terminee ? '🏁 Fin de journée validée à ' + heure(j.fin.valideLe) : '🚚 Journée en cours') +
           (j.fin.hasLV ? '' : ' — lettre de voiture pas encore envoyée') + '</div>' +
-        (j.fin.saisi ? '<div class="saisi-info">✅ Saisie par ' + escHtml(j.fin.saisiPar || '?') + (j.fin.saisiLe ? ' le ' + new Date(j.fin.saisiLe).toLocaleDateString('fr-FR') : '') + '</div>' : '') +
+        (admin && j.fin.saisi ? '<div class="saisi-info">✅ Saisie par ' + escHtml(j.fin.saisiPar || '?') + (j.fin.saisiLe ? ' le ' + new Date(j.fin.saisiLe).toLocaleDateString('fr-FR') : '') + '</div>' : '') +
       '</div>' +
       (j.etapes.length ? '<details class="etapes"><summary>Détail des tours</summary>' + j.etapes.map(function(e) {
         var comm = e.commentaire ? '<div class="item-sub">💬 <i>' + escHtml(e.commentaire) + '</i></div>' : '';
@@ -786,12 +803,41 @@ function renderJournees() {
       }).join('') + '</details>' : '') +
       '<div class="item-actions">' +
         (j.fin.hasLV ? '<button class="btn btn-secondary btn-small" onclick="voirPhoto(\'/lv/' + escHtml(j.jk) + '/' + escHtml(j.cid) + '\')">🧾 Lettre de voiture</button>' : '') +
-        (j.terminee ? (j.fin.saisi
+        (admin && j.terminee ? (j.fin.saisi
           ? '<button class="btn btn-secondary btn-small" onclick="setSaisi(' + k + ', false)">↩️ Remettre à saisir</button>'
           : '<button class="btn btn-ok btn-small" onclick="setSaisi(' + k + ', true)">✅ Marquer saisie</button>') : '') +
-        '<button class="btn btn-danger btn-small" onclick="deleteJournee(' + k + ')">🗑️ Supprimer</button>' +
+        (admin ? '<button class="btn btn-danger btn-small" onclick="deleteJournee(' + k + ')">🗑️ Supprimer</button>' : '') +
       '</div></div>';
-  }).join('') + (list.length > 300 ? '<div class="empty">300 premières affichées — affinez les filtres</div>' : '');
+}
+
+// ── Chauffeur : historique de ses journées passées (chargé à la demande) ─────
+var histoOuvert = false, histoJournees = [];
+function basculerHisto() {
+  histoOuvert = !histoOuvert;
+  $('histoBtn').textContent = histoOuvert ? '✕ Masquer l\'historique' : '📅 Voir mes journées passées';
+  $('histoZone').classList.toggle('hidden', !histoOuvert);
+  if (histoOuvert) chargerHisto();
+}
+function chargerHisto() {
+  if (!histoOuvert || !me) return;
+  $('histoList').innerHTML = '<div class="empty">Chargement…</div>';
+  Promise.all([db.ref(ROOT + '/tours').once('value'), db.ref(ROOT + '/finJournee').once('value')]).then(function(r) {
+    var t = r[0].val() || {}, f = r[1].val() || {}, mesT = {}, mesF = {};
+    // On ne garde que les journées de ce chauffeur, sauf celle en cours
+    Object.keys(t).forEach(function(jk) { if (jk !== maJournee && t[jk][me.id]) { mesT[jk] = {}; mesT[jk][me.id] = t[jk][me.id]; } });
+    Object.keys(f).forEach(function(jk) { if (jk !== maJournee && f[jk][me.id]) { mesF[jk] = {}; mesF[jk][me.id] = f[jk][me.id]; } });
+    histoJournees = toutesJournees(mesT, mesF);
+    renderHisto();
+  }).catch(function(e) { $('histoList').innerHTML = '<div class="empty">Erreur : ' + escHtml(e.message) + '</div>'; });
+}
+function renderHisto() {
+  var mois = $('histoMois').value;
+  var list = histoJournees.filter(function(j) { return !mois || j.date.slice(0, 7) === mois; });
+  var m3 = list.reduce(function(s, j) { return s + j.m3; }, 0), nbT = list.reduce(function(s, j) { return s + j.tours.length; }, 0);
+  $('histoCount').textContent = list.length + ' journée' + (list.length > 1 ? 's' : '') + ' — ' + nbT + ' tour' + (nbT > 1 ? 's' : '') + ' — ' + fmtNombre(m3) + ' m³';
+  $('histoList').innerHTML = list.length
+    ? list.slice(0, 100).map(function(j) { return carteJournee(j, false); }).join('') + (list.length > 100 ? '<div class="empty">100 dernières affichées — choisissez un mois</div>' : '')
+    : '<div class="empty">Aucune journée passée' + (mois ? ' sur ce mois' : '') + '</div>';
 }
 function voirPhoto(chemin) {
   $('modalImg').removeAttribute('src');
@@ -1144,7 +1190,9 @@ function renderTour() {
   if (manque) $('suiteAttente').textContent = '📷 Envoyez la photo du bon de livraison du ' + ordinal(mesTours[manque].numero || 1) + ' tour pour continuer';
   $('tourSuivantBtn').classList.toggle('verrou', !!manque);
   $('finJourneeBtn').classList.toggle('verrou', !!manque);
-  $('bientotCard').classList.toggle('hidden', !!etapes.length);
+  // Chauffeur : l'historique remplace « écrans à venir »
+  $('bientotCard').classList.add('hidden');
+  $('histoCard').classList.remove('hidden');
   if (!camion) return;
   $('tourSelField').classList.toggle('hidden', !!etapes.length);
   $('tourForm').classList.toggle('hidden', !f || f.type !== 'tour');
@@ -1388,6 +1436,7 @@ function validerFinJournee() {
     updates[ROOT + '/journeeEnCours/' + me.id] = { cle: journeeSuivante(), date: jourAffect };
     db.ref().update(updates).then(function() {
       showToast('✅ Journée terminée — vous pouvez démarrer une nouvelle journée', true);
+      setTimeout(chargerHisto, 300);
       window.scrollTo(0, 0);
     }).catch(function(e) { showToast('Erreur : ' + e.message); if (btn) btn.disabled = false; });
   });
