@@ -120,6 +120,8 @@
   .tour-fait .ligne span { color: var(--text-dim); font-size: 13px; width: 80px; flex-shrink: 0; padding-top: 1px; }
   .tour-fait .ligne b { font-weight: 600; min-width: 0; overflow-wrap: anywhere; }
   .tour-fait .btn { margin-top: 12px; }
+  .suite-btns { display: flex; flex-direction: column; gap: 10px; }
+  .suite-btns .btn { font-size: 17px; padding: 16px; }
   .bl-zone { margin-top: 14px; border: 2px dashed var(--red-mid); border-radius: var(--radius); background: var(--red-light); text-align: center;
     padding: 18px 12px; cursor: pointer; color: var(--red); font-weight: 700; }
   .bl-zone .big { font-size: 32px; display: block; margin-bottom: 4px; }
@@ -230,6 +232,13 @@
         </div>
         <div class="hidden" id="tourFait"></div>
       </div>
+      <!-- Chauffeur : suite de la journée une fois le tour enregistré -->
+      <div class="card hidden" style="max-width:none;margin-bottom:16px" id="suiteCard">
+        <div class="suite-btns">
+          <button class="btn btn-primary" onclick="tourSuivant()">➕ Tour suivant</button>
+          <button class="btn btn-secondary" onclick="transfertCentrale()">➕ Transfert vers autre centrale</button>
+        </div>
+      </div>
       <div class="card" style="max-width:none" id="bientotCard"><div class="empty">Les autres écrans de l'application arrivent bientôt.</div></div>
     </section>
 
@@ -333,7 +342,7 @@
 <script>
 // ── Version ──────────────────────────────────────────────────────────────────
 // ⚠️ Changer ce numéro à chaque modification du code
-var APP_VERSION = '0.12';
+var APP_VERSION = '0.13';
 
 // ── Firebase ─────────────────────────────────────────────────────────────────
 // Même projet Firebase que Suivi Parc et Carburant, mais toutes les données
@@ -845,8 +854,11 @@ function renderTour() {
   if (!me || me.role !== 'chauffeur') return;
   var camion = monCamion();
   $('tourCard').classList.toggle('hidden', !camion);
+  var tour = camion && mesTours[1];
+  // Une fois le tour enregistré, les deux boutons remplacent « écrans à venir »
+  $('suiteCard').classList.toggle('hidden', !tour || editionTour);
+  $('bientotCard').classList.toggle('hidden', !!tour && !editionTour);
   if (!camion) return;
-  var tour = mesTours[1];
   var formOuvert = editionTour || (!tour && $('choixTour').value === '1');
   $('tourSelField').classList.toggle('hidden', !!tour);
   $('tourForm').classList.toggle('hidden', !formOuvert);
@@ -933,6 +945,10 @@ function ecrireTour(centrale, client, qte, adresse, zone, eau) {
   }).catch(function(e) { showToast('Erreur : ' + e.message); })
     .then(function() { btn.disabled = false; });
 }
+
+// Écrans à construire : pour l'instant les boutons préviennent seulement
+function tourSuivant() { showToast('Tour suivant : écran à venir'); }
+function transfertCentrale() { showToast('Transfert vers autre centrale : écran à venir'); }
 
 // ── Rajout d'eau : question posée à la validation du tour ────────────────────
 var eauCb = null;
