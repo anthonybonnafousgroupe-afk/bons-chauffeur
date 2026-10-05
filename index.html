@@ -204,6 +204,7 @@
 </style>
 <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-database-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-auth-compat.js"></script>
 </head>
 <body>
 
@@ -234,6 +235,7 @@
       <input id="loginPwd" type="password" autocomplete="current-password" onkeydown="if(event.key==='Enter')doLogin()"></div>
     <button class="btn btn-primary" id="loginBtn" onclick="doLogin()">Se connecter →</button>
     <div class="error" id="loginError"></div>
+    <div class="hint" id="loginInfo" style="text-align:center;margin-top:8px"></div>
   </div>
   <div class="version" id="versionLogin"></div>
 </div>
@@ -342,7 +344,7 @@
           <div class="hint">Notez-le et donnez-le au chauffeur : il ne pourra plus être affiché ensuite</div></div>
         <div class="field"><label>Téléphone</label><input id="cTel" type="tel" autocomplete="off" placeholder="Ex : 06 12 34 56 78"></div>
         <div class="field"><label>Rôle</label><select id="cRole"></select></div>
-        <button class="btn btn-primary" onclick="addUser()">Créer le compte</button>
+        <button class="btn btn-primary" id="cAddBtn" onclick="addUser()">Créer le compte</button>
       </div>
       <div class="summary" id="usersCount"></div>
       <div id="usersList"></div>
@@ -468,7 +470,7 @@
 <script>
 // ── Version ──────────────────────────────────────────────────────────────────
 // ⚠️ Changer ce numéro à chaque modification du code
-var APP_VERSION = '0.22';
+var APP_VERSION = '0.23';
 
 // ── Firebase ─────────────────────────────────────────────────────────────────
 // Même projet Firebase que Suivi Parc et Carburant, mais toutes les données
@@ -485,6 +487,11 @@ var firebaseConfig = {
 var ROOT = 'bons';
 var SESSION_KEY = 'bonnafous_bons_session';
 var SESSION_DAYS = 30;
+// Connexion sécurisée (Firebase Authentication) : chaque compte a un e-mail technique, jamais utilisé pour écrire.
+// Après un nouveau mot de passe, l'administrateur crée un nouvel accès (id.2@…, id.3@…), l'ancien ne donne plus de droits.
+var AUTH_DOMAINE = '@bons-chauffeur.bonnafous.fr';
+function emailCompte(id, gen) { return id + (gen ? '.' + gen : '') + AUTH_DOMAINE; }
+var authGestion = null;  // 2e connexion Firebase : créer l'accès d'un chauffeur sans déconnecter l'administrateur
 
 var db;
 // ── Rôles et droits ──────────────────────────────────────────────────────────
@@ -601,25 +608,96 @@ window.addEventListener('load', function() {
 
   var sess = null;
   try { sess = JSON.parse(storeGet(SESSION_KEY)); } catch(e) {}
-  if (sess && sess.id && Date.now() - sess.ts < SESSION_DAYS * 864e5) {
-    // Revérifier que le compte existe toujours et reste actif
-    db.ref(ROOT + '/users/' + sess.id).once('value').then(function(snap) {
-      var u = snap.val();
-      if (u && u.actif !== false) startApp(u); else { storeRemove(SESSION_KEY); checkSetup(); }
-    }).catch(function() { checkSetup(); });
-  } else {
-    checkSetup();
-  }
+  var premier = true;
+  firebase.auth().onAuthStateChanged(function(fbUser) {
+    if (!premier) return;
+    premier = false;
+    if (fbUser && sess && sess.id && Date.now() - sess.ts < SESSION_DAYS * 864e5) {
+      // Connexion sécurisée gardée par le téléphone : revérifier que le compte existe et reste actif
+      chargerCompte(fbUser).then(function(u) { if (u) startApp(u); else checkSetup(); })
+        .catch(function() { firebase.auth().signOut(); checkSetup(); });
+    } else {
+      if (fbUser) firebase.auth().signOut();
+      // Ancienne session (avant la connexion sécurisée) : on redemande le mot de passe une fois
+      if (sess && sess.id) {
+        storeRemove(SESSION_KEY);
+        $('loginId').value = sess.id;
+        $('loginInfo').textContent = '🔒 Nouvelle connexion sécurisée : entrez votre mot de passe une dernière fois';
+      }
+      checkSetup();
+    }
+  });
 });
+
+// Compte lié à la connexion Firebase : vérifie l'accès et l'état du compte
+function chargerCompte(fbUser) {
+  return db.ref(ROOT + '/uids/' + fbUser.uid).once('value').then(function(s) {
+    var id = s.val();
+    if (!id) return null;
+    return db.ref(ROOT + '/users/' + id).once('value').then(function(snap) {
+      var u = snap.val();
+      if (!u || u.authEmail !== fbUser.email) return null;
+      if (u.actif === false) throw new Error('desactive');
+      return u;
+    });
+  });
+}
+function messageAuth(e) {
+  var c = (e && e.code) || '';
+  if (/wrong-password|invalid-credential|invalid-login-credentials|user-not-found|invalid-email/.test(c)) return 'Identifiant ou mot de passe incorrect';
+  if (/too-many-requests/.test(c)) return 'Trop d\'essais — réessayez dans quelques minutes';
+  if (/network-request-failed/.test(c)) return 'Pas de réseau — vérifiez la connexion';
+  if (/PERMISSION_DENIED|permission/i.test((e && e.message) || '') || /permission/.test(c)) return 'Accès refusé par la base';
+  return 'Erreur : ' + ((e && e.message) || c);
+}
+// Crée l'accès Firebase d'un compte (essaie id@…, puis id.2@…, id.3@… si déjà pris)
+function creerAcces(auth, id, pwd, gen, essais) {
+  essais = essais || 0;
+  var email = emailCompte(id, gen);
+  return auth.createUserWithEmailAndPassword(email, pwd).then(function(cred) {
+    return { email: email, uid: cred.user.uid, gen: gen };
+  }).catch(function(e) {
+    if (e.code === 'auth/email-already-in-use' && essais < 30) {
+      // Accès déjà créé auparavant avec ce mot de passe (connexion interrompue) : on le reprend
+      return auth.signInWithEmailAndPassword(email, pwd).then(function(cred) {
+        return { email: email, uid: cred.user.uid, gen: gen };
+      }).catch(function() { return creerAcces(auth, id, pwd, gen + 1, essais + 1); });
+    }
+    throw e;
+  });
+}
+function authAdmin() {
+  if (!authGestion) authGestion = firebase.initializeApp(firebaseConfig, 'gestion').auth();
+  return authGestion;
+}
+// Accès créé par l'administrateur pour un autre compte (sans le déconnecter lui-même)
+function creerAccesPour(id, pwd, gen) {
+  var a = authAdmin();
+  return creerAcces(a, id, pwd, gen).then(function(r) { return a.signOut().then(function() { return r; }); })
+    .catch(function(e) {
+      // Connexion sécurisée pas encore activée dans Firebase : le compte fonctionne comme avant
+      if (e.code === 'auth/operation-not-allowed') return null;
+      throw e;
+    });
+}
+function lierAcces(id, r, ancienUid) {
+  var updates = {};
+  updates[ROOT + '/users/' + id + '/authEmail'] = r.email;
+  updates[ROOT + '/users/' + id + '/authGen'] = r.gen;
+  updates[ROOT + '/users/' + id + '/uid'] = r.uid;
+  updates[ROOT + '/uids/' + r.uid] = id;
+  if (ancienUid && ancienUid !== r.uid) updates[ROOT + '/uids/' + ancienUid] = null;
+  return db.ref().update(updates);
+}
 
 // Aucun compte en base → écran de création du compte administrateur
 function checkSetup() {
-  db.ref(ROOT + '/users').limitToFirst(1).once('value').then(function(snap) {
-    showScreen(snap.exists() ? 'loginScreen' : 'setupScreen');
-  }).catch(function(e) {
-    showScreen('loginScreen');
-    $('loginError').textContent = 'Connexion à la base impossible : ' + e.message;
-  });
+  db.ref(ROOT + '/reglages/initialise').once('value').then(function(s) {
+    if (s.val()) return showScreen('loginScreen');
+    return db.ref(ROOT + '/users').limitToFirst(1).once('value').then(function(snap) {
+      showScreen(snap.exists() ? 'loginScreen' : 'setupScreen');
+    });
+  }).catch(function() { showScreen('loginScreen'); });
 }
 
 function doSetup() {
@@ -630,7 +708,7 @@ function doSetup() {
     if (snap.exists()) { showScreen('loginScreen'); return; }
     return hashPwd(id, pwd).then(function(h) {
       var u = { id: id, nom: nom, role: 'admin', hash: h, actif: true, createdAt: Date.now() };
-      return db.ref(ROOT + '/users/' + id).set(u).then(function() { startApp(u); });
+      return db.ref(ROOT + '/users/' + id).set(u).then(function() { return migrerAcces(u, pwd); }).then(function(u2) { startApp(u2 || u); });
     });
   }).catch(function(e) { $('setupError').textContent = 'Erreur : ' + e.message; });
 }
@@ -640,19 +718,53 @@ function doLogin() {
   err.textContent = '';
   if (!id || !pwd) { err.textContent = 'Entrez votre identifiant et votre mot de passe'; return; }
   $('loginBtn').disabled = true;
-  db.ref(ROOT + '/users/' + id).once('value').then(function(snap) {
-    var u = snap.val();
-    return hashPwd(id, pwd).then(function(h) {
-      if (!u || u.hash !== h) { err.textContent = 'Identifiant ou mot de passe incorrect'; $('loginPwd').value = ''; return; }
-      if (u.actif === false) { err.textContent = 'Compte désactivé — contactez le bureau'; return; }
-      startApp(u);
+  var echec = function(msg) { err.textContent = msg; $('loginPwd').value = ''; };
+  db.ref(ROOT + '/users/' + id + '/authEmail').once('value').then(function(s) {
+    var email = s.val();
+    if (email) {
+      // Compte sécurisé : connexion Firebase
+      return firebase.auth().signInWithEmailAndPassword(email, pwd).then(function(cred) {
+        return chargerCompte(cred.user).then(function(u) {
+          if (!u) { firebase.auth().signOut(); return echec('Compte introuvable — contactez le bureau'); }
+          $('loginInfo').textContent = '';
+          startApp(u);
+        }, function() {
+          // Mot de passe bon mais compte désactivé (la base refuse alors l'accès)
+          firebase.auth().signOut();
+          echec('Compte désactivé — contactez le bureau');
+        });
+      });
+    }
+    // Compte pas encore sécurisé : vérification à l'ancienne, puis création de l'accès sécurisé
+    return db.ref(ROOT + '/users/' + id).once('value').then(function(snap) {
+      var u = snap.val();
+      return hashPwd(id, pwd).then(function(h) {
+        if (!u || u.hash !== h) return echec('Identifiant ou mot de passe incorrect');
+        if (u.actif === false) return echec('Compte désactivé — contactez le bureau');
+        return migrerAcces(u, pwd).then(function(u2) { $('loginInfo').textContent = ''; startApp(u2 || u); });
+      });
+    }, function() {
+      echec('Votre compte doit être réactivé : demandez un nouveau mot de passe à l\'administrateur');
     });
-  }).catch(function(e) { err.textContent = 'Erreur : ' + e.message; })
-    .then(function() { $('loginBtn').disabled = false; });
+  }).catch(function(e) {
+    if (e && e.message === 'desactive') { firebase.auth().signOut(); return echec('Compte désactivé — contactez le bureau'); }
+    echec(messageAuth(e));
+  }).then(function() { $('loginBtn').disabled = false; });
+}
+// 1re connexion après la mise à jour : crée l'accès sécurisé avec le mot de passe que la personne vient de taper
+function migrerAcces(u, pwd) {
+  return creerAcces(firebase.auth(), u.id, pwd, 0).then(function(r) {
+    return lierAcces(u.id, r).then(function() { return Object.assign({}, u, { authEmail: r.email, uid: r.uid, authGen: r.gen }); });
+  }).catch(function(e) {
+    // Connexion sécurisée pas encore activée dans Firebase : on continue comme avant
+    if (e.code === 'auth/operation-not-allowed') return u;
+    throw e;
+  });
 }
 
 function doLogout() {
   storeRemove(SESSION_KEY);
+  firebase.auth().signOut();
   if (usersRef) usersRef.off();
   if (camionsRef) camionsRef.off();
   if (affectRef) affectRef.off();
@@ -684,6 +796,8 @@ function startApp(u) {
   $('nav').classList.add('hidden');
   $('adminTuiles').classList.toggle('hidden', !can('admin'));
   if (can('admin')) $('bientotCard').classList.add('hidden');
+  // Repère public « un administrateur existe » : l'écran de création reste caché une fois la base verrouillée
+  if (can('admin')) db.ref(ROOT + '/reglages/initialise').set(true).catch(function() {});
   $('cRole').innerHTML = Object.keys(ROLES).map(function(r) {
     return '<option value="' + r + '">' + ROLES[r].label + '</option>';
   }).join('');
@@ -1725,11 +1839,13 @@ function renderUsers() {
   majTuiles();
   var users = Object.values(allUsers).sort(byNom);
   var nbChauffeurs = users.filter(function(u) { return u.role === 'chauffeur' && u.actif !== false; }).length;
-  $('usersCount').textContent = users.length + ' compte' + (users.length > 1 ? 's' : '') + ' — ' + nbChauffeurs + ' chauffeur' + (nbChauffeurs > 1 ? 's' : '') + ' actif' + (nbChauffeurs > 1 ? 's' : '');
+  var nbASecuriser = users.filter(function(u) { return !u.authEmail; }).length;
+  $('usersCount').textContent = users.length + ' compte' + (users.length > 1 ? 's' : '') + ' — ' + nbChauffeurs + ' chauffeur' + (nbChauffeurs > 1 ? 's' : '') + ' actif' + (nbChauffeurs > 1 ? 's' : '') +
+    (nbASecuriser ? ' — ⚠️ ' + nbASecuriser + ' à sécuriser (la personne doit se connecter une fois, ou recevoir un nouveau mot de passe)' : ' — 🔒 tous sécurisés');
   $('usersList').innerHTML = users.map(function(u) {
     var self = u.id === me.id, id = escHtml(u.id);
     return '<div class="item' + (u.actif === false ? ' off' : '') + '"><div class="item-head"><div><b>' + escHtml(u.nom) + '</b>' +
-      '<div class="item-sub">Identifiant : <b>' + id + '</b></div>' +
+      '<div class="item-sub">Identifiant : <b>' + id + '</b> ' + (u.authEmail ? '<span class="tag ok">🔒 Sécurisé</span>' : '<span class="tag off">⚠️ À sécuriser</span>') + '</div>' +
       '<div class="item-sub">📞 ' + (u.tel ? '<b>' + escHtml(u.tel) + '</b>' : '<i>non renseigné</i>') + '</div></div>' +
       '<div style="text-align:right"><span class="tag' + (roleOf(u).admin ? ' admin' : '') + '">' + roleOf(u).label + '</span>' +
       (u.actif === false ? '<br><span class="tag off" style="margin-top:4px">Désactivé</span>' : '') + '</div></div>' +
@@ -1752,19 +1868,36 @@ function addUser() {
   if (!id) { showToast("Indiquez l'identifiant de connexion"); $('cId').focus(); return; }
   if (pwd.length < 6) { showToast('Mot de passe : 6 caractères minimum'); $('cPwd').focus(); return; }
   if (allUsers[id]) { showToast('Cet identifiant existe déjà'); $('cId').focus(); return; }
-  hashPwd(id, pwd).then(function(h) {
-    return db.ref(ROOT + '/users/' + id).set({ id: id, nom: nom, tel: tel, role: role, hash: h, actif: true, createdAt: Date.now() });
+  var btn = $('cAddBtn'); if (btn) btn.disabled = true;
+  Promise.all([hashPwd(id, pwd), creerAccesPour(id, pwd, 0)]).then(function(r) {
+    var u = { id: id, nom: nom, tel: tel, role: role, hash: r[0], actif: true, createdAt: Date.now() };
+    if (r[1]) { u.authEmail = r[1].email; u.authGen = r[1].gen; u.uid = r[1].uid; }
+    var updates = {};
+    updates[ROOT + '/users/' + id] = u;
+    if (r[1]) updates[ROOT + '/uids/' + r[1].uid] = id;
+    return db.ref().update(updates);
   }).then(function() {
     showToast('✅ Compte créé — identifiant : ' + id, true);
     $('cNom').value = ''; $('cId').value = ''; $('cPwd').value = ''; $('cTel').value = ''; $('cRole').value = 'chauffeur';
-  }).catch(function(e) { showToast('Erreur : ' + e.message); });
+  }).catch(function(e) { showToast(messageAuth(e)); })
+    .then(function() { if (btn) btn.disabled = false; });
 }
 
 function resetPwd(id) {
   demander('Nouveau mot de passe pour « ' + allUsers[id].nom + ' » (6 caractères minimum) :', '', function(pwd) {
     if (pwd.length < 6) { showToast('Mot de passe trop court'); return; }
-    hashPwd(id, pwd).then(function(h) { return db.ref(ROOT + '/users/' + id + '/hash').set(h); })
-      .then(function() { showToast('Mot de passe modifié', true); });
+    var u = allUsers[id];
+    // Nouvel accès sécurisé avec ce mot de passe ; l'ancien ne donne plus aucun droit
+    Promise.all([hashPwd(id, pwd), creerAccesPour(id, pwd, (u.authGen || 0) + 1)]).then(function(r) {
+      return db.ref(ROOT + '/users/' + id + '/hash').set(r[0]).then(function() {
+        if (!r[1]) return;
+        return lierAcces(id, r[1], u.uid).then(function() {
+          // Son propre mot de passe : l'administrateur se reconnecte avec le nouvel accès
+          if (id === me.id) return firebase.auth().signInWithEmailAndPassword(r[1].email, pwd);
+        });
+      });
+    }).then(function() { showToast('Mot de passe modifié', true); })
+      .catch(function(e) { showToast(messageAuth(e)); });
   });
 }
 
@@ -1795,6 +1928,7 @@ function deleteUser(id) {
     (nbDocs ? ' Ses ' + nbDocs + ' document' + (nbDocs > 1 ? 's' : '') + ' seront aussi supprimés.' : ''), { ok: 'Supprimer', danger: true }, function() {
     var updates = {};
     updates[ROOT + '/users/' + id] = null;
+    if (allUsers[id].uid) updates[ROOT + '/uids/' + allUsers[id].uid] = null;
     updates[ROOT + '/docsChauffeurs/' + id] = null;
     updates[ROOT + '/docsFichiers/' + id] = null;
     db.ref().update(updates).then(function() { showToast('Compte supprimé'); });
