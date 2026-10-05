@@ -419,7 +419,7 @@
 <script>
 // ── Version ──────────────────────────────────────────────────────────────────
 // ⚠️ Changer ce numéro à chaque modification du code
-var APP_VERSION = '0.19';
+var APP_VERSION = '0.20';
 
 // ── Firebase ─────────────────────────────────────────────────────────────────
 // Même projet Firebase que Suivi Parc et Carburant, mais toutes les données
@@ -796,7 +796,9 @@ function carteJournee(j, admin) {
         if (e.type === 'transfert') return '<div class="etape">🔄 <b>Transfert</b> ' + escHtml(e.depart) + ' → ' + escHtml(e.arrivee) +
           ' <span class="item-sub">(' + heure(e.enregistreLe) + ')</span>' + comm + '</div>';
         return '<div class="etape"><b>' + ordinal(e.numero || 1) + ' tour</b> — ' + escHtml(e.centrale) + ' → <b>' + escHtml(e.client) + '</b> — ' + escHtml(fmtQte(e.quantite)) +
-          '<div class="item-sub">' + escHtml(e.adresse) + ' — ' + escHtml(e.zone || '') + (e.distanceKm != null ? ' (' + fmtKm(e.distanceKm) + ')' : '') +
+          '<div class="item-sub">' + escHtml(e.adresse) + ' ' + lienCarte(e) + '</div>' +
+          '<div class="item-sub">' + texteGps(e) + '</div>' +
+          '<div class="item-sub">' + escHtml(e.zone || '') + (e.distanceKm != null ? ' (' + fmtKm(e.distanceKm) + ')' : '') +
           ' — ' + (e.eauAjout ? '💧 ' + fmtNombre(e.eauLitres) + ' L' : 'sans eau') + ' — ' + heure(e.enregistreLe) + '</div>' + comm +
           (e.hasBL ? '<button class="btn btn-secondary btn-small" onclick="voirPhoto(\'/bl/' + escHtml(j.jk) + '/' + escHtml(j.cid) + '/' + e.n + '\')">🧾 Bon de livraison</button>'
                    : '<div class="item-sub" style="color:var(--warn)">Bon de livraison pas encore envoyé</div>') + '</div>';
@@ -872,7 +874,7 @@ function deleteJournee(jk, cid) {
 }
 // Une ligne par tour ou transfert
 function exportCsv() {
-  var rows = [['Date', 'Journée', 'Chauffeur', 'Plaque', 'Étape', 'Centrale de départ', 'Client', 'Quantité (m³)', 'Adresse de livraison', 'Zone',
+  var rows = [['Date', 'Journée', 'Chauffeur', 'Plaque', 'Étape', 'Centrale de départ', 'Client', 'Quantité (m³)', 'Adresse de livraison', 'GPS livraison', 'Zone',
     'Distance (km)', 'Rajout d\'eau (L)', 'Bon de livraison', 'Centrale d\'arrivée (transfert)', 'Heure', 'Commentaire', 'Lettre de voiture', 'Fin de journée', 'État', 'Saisie par', 'Saisie le']];
   filteredJournees().slice().reverse().forEach(function(j) {
     var commun = function(e) {
@@ -880,11 +882,11 @@ function exportCsv() {
     };
     var fin = [j.fin.hasLV ? 'Envoyée' : 'Non envoyée', j.terminee ? heure(j.fin.valideLe) : 'En cours',
       !j.terminee ? 'En cours' : j.fin.saisi ? 'Saisie' : 'À saisir', j.fin.saisiPar || '', j.fin.saisiLe ? new Date(j.fin.saisiLe).toLocaleDateString('fr-FR') : ''];
-    if (!j.etapes.length) rows.push(commun({}).concat(['', '', '', '', '', '', '', '', '', '', '', '']).concat(fin));
+    if (!j.etapes.length) rows.push(commun({}).concat(['', '', '', '', '', '', '', '', '', '', '', '', '']).concat(fin));
     j.etapes.forEach(function(e) {
       rows.push(commun(e).concat(e.type === 'transfert'
-        ? ['Transfert', e.depart, '', '', '', '', '', '', '', e.arrivee, heure(e.enregistreLe), e.commentaire || '']
-        : [ordinal(e.numero || 1) + ' tour', e.centrale, e.client, fmtNombre(e.quantite), e.adresse, e.zone || '',
+        ? ['Transfert', e.depart, '', '', '', '', '', '', '', '', e.arrivee, heure(e.enregistreLe), e.commentaire || '']
+        : [ordinal(e.numero || 1) + ' tour', e.centrale, e.client, fmtNombre(e.quantite), e.adresse, e.gps ? e.gps.lat + ', ' + e.gps.lng : '', e.zone || '',
            e.distanceKm != null ? fmtNombre(e.distanceKm) : '', e.eauAjout ? fmtNombre(e.eauLitres) : '0', e.hasBL ? 'Envoyé' : 'Non envoyé', '', heure(e.enregistreLe), e.commentaire || '']
       ).concat(fin));
     });
@@ -1088,9 +1090,11 @@ function calculerDistance() {
   distInfo = null;
   hint.className = 'hint'; hint.textContent = '⏳ Calcul de la distance depuis ' + c + '…';
   var dest = gpsPos && gpsAdresse === adr ? Promise.resolve(gpsPos) : geocoder(adr);
-  Promise.all([positionCentrale(centraleParNom(c)), dest]).then(function(p) { return itineraire(p[0], p[1]); }).then(function(r) {
+  Promise.all([positionCentrale(centraleParNom(c)), dest]).then(function(p) {
+    return itineraire(p[0], p[1]).then(function(r) { r.dest = { lat: Math.round(p[1].lat * 1e6) / 1e6, lng: Math.round(p[1].lng * 1e6) / 1e6 }; return r; });
+  }).then(function(r) {
     if (seq !== distSeq) return;
-    distInfo = { centrale: c, adresse: adr, km: r.km, min: r.min };
+    distInfo = { centrale: c, adresse: adr, km: r.km, min: r.min, dest: r.dest };
     var z = zoneDe(r.km);
     $('tZone').value = z;
     hint.className = 'hint ok';
@@ -1221,7 +1225,7 @@ function resumeEtape(n) {
     '<div class="ligne"><span>Client</span><b>' + escHtml(tour.client) + '</b></div>' +
     '<div class="ligne"><span>Quantité</span><b>' + escHtml(fmtQte(tour.quantite)) + '</b></div>' +
     '<div class="ligne"><span>Livraison</span><b>' + escHtml(tour.adresse) +
-      (tour.gps ? ' <a href="https://www.google.com/maps?q=' + Number(tour.gps.lat) + ',' + Number(tour.gps.lng) + '" target="_blank" rel="noopener" style="color:var(--red);font-size:13px;white-space:nowrap">🗺️ Carte</a>' : '') + '</b></div>' +
+      ' ' + lienCarte(tour) + '</b></div>' +
     (tour.distanceKm != null ? '<div class="ligne"><span>Distance</span><b>' + fmtKm(tour.distanceKm) + ' (≈ ' + fmtMin(tour.dureeMin) + ')</b></div>' : '') +
     '<div class="ligne"><span>Zone</span><b>' + escHtml(tour.zone || '—') + '</b></div>' +
     '<div class="ligne"><span>Eau</span><b>' + (tour.eauAjout ? '💧 Oui — ' + escHtml(String(tour.eauLitres).replace('.', ',')) + ' L' : 'Pas de rajout') + '</b></div>' +
@@ -1306,7 +1310,7 @@ function modifierEtape(n) {
   $('tCentrale').value = tour.centrale; $('tClient').value = tour.client;
   $('tQte').value = String(tour.quantite).replace('.', ','); $('tAdresse').value = tour.adresse;
   $('tZone').value = tour.zone || ''; $('tComm').value = tour.commentaire || '';
-  distInfo = tour.distanceKm != null ? { centrale: tour.centrale, adresse: tour.adresse, km: tour.distanceKm, min: tour.dureeMin } : null;
+  distInfo = tour.distanceKm != null ? { centrale: tour.centrale, adresse: tour.adresse, km: tour.distanceKm, min: tour.dureeMin, dest: tour.gps || null } : null;
   $('zoneHint').className = 'hint' + (distInfo ? ' ok' : '');
   $('zoneHint').textContent = distInfo ? '🛣️ ' + fmtKm(distInfo.km) + ' depuis ' + distInfo.centrale + ' (≈ ' + fmtMin(distInfo.min) + ')' : '';
   renderTour(); allerAuFormulaire('tourForm');
@@ -1326,13 +1330,34 @@ function enregistrerTour() {
   demanderEau(avant, function(eau) { ecrireTour(f, avant, centrale, client, qte, adresse, zone, eau); });
 }
 
+// Point GPS de la livraison : position du téléphone (« Me localiser ») ou suggestion choisie,
+// sinon le point trouvé pour l'adresse lors du calcul de distance
+function pointLivraison(adresse, avant, distOk) {
+  if (gpsPos && gpsAdresse === adresse) return Object.assign({}, gpsPos, { source: gpsPos.precision != null ? 'telephone' : 'adresse' });
+  if (avant && avant.adresse === adresse && avant.gps) return avant.gps;
+  if (distOk && distInfo.dest) return { lat: distInfo.dest.lat, lng: distInfo.dest.lng, source: 'adresse' };
+  return null;
+}
+// Lien carte : le point GPS s'il existe, sinon une recherche de l'adresse
+function lienCarte(e) {
+  var url = e.gps ? 'https://www.google.com/maps?q=' + Number(e.gps.lat) + ',' + Number(e.gps.lng)
+                  : 'https://www.google.com/maps/search/?api=1&query=' + encodeURIComponent(e.adresse || '');
+  return '<a href="' + url + '" target="_blank" rel="noopener" style="color:var(--red);font-size:13px;font-weight:600;white-space:nowrap">🗺️ ' +
+    (e.gps ? 'Carte' : 'Chercher l\'adresse') + '</a>';
+}
+function texteGps(e) {
+  if (!e.gps) return '📍 Pas de point GPS enregistré';
+  return '📍 ' + Number(e.gps.lat).toFixed(6) + ', ' + Number(e.gps.lng).toFixed(6) +
+    (e.gps.source === 'telephone' || (e.gps.source == null && e.gps.precision != null) ? ' — position du téléphone' + (e.gps.precision ? ' (± ' + e.gps.precision + ' m)' : '') : ' — d\'après l\'adresse');
+}
+
 function ecrireTour(f, avant, centrale, client, qte, adresse, zone, eau) {
   var btn = $('tourSaveBtn'), numero = numeroTour(f.n), lib = ordinal(numero) + ' tour';
   var distOk = !!(distInfo && distInfo.centrale === centrale && distInfo.adresse === adresse);
   btn.disabled = true;
   db.ref(ROOT + '/tours/' + maJournee + '/' + me.id + '/' + f.n).set({
     type: 'tour', numero: numero, plaque: monCamion(), chauffeurId: me.id, chauffeurNom: me.nom,
-    centrale: centrale, client: client, quantite: qte, adresse: adresse, zone: zone, gps: gpsPos && gpsAdresse === adresse ? gpsPos : (avant && avant.adresse === adresse && avant.gps) || null,
+    centrale: centrale, client: client, quantite: qte, adresse: adresse, zone: zone, gps: pointLivraison(adresse, avant, distOk),
     distanceKm: distOk ? distInfo.km : null, dureeMin: distOk ? distInfo.min : null,
     eauAjout: eau.ajout, eauLitres: eau.ajout ? eau.litres : null, commentaire: $('tComm').value.trim() || null,
     hasBL: !!(avant && avant.hasBL), blLe: (avant && avant.blLe) || null,
