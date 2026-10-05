@@ -89,6 +89,17 @@
   .nav button { flex: 1; background: none; border: none; padding: 10px 4px 9px; font-family: inherit; font-size: 11px; font-weight: 600;
     color: var(--text-dim); display: flex; flex-direction: column; align-items: center; gap: 3px; cursor: pointer; }
   .nav button .ic { font-size: 21px; }
+  .tuiles { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  .tuile { aspect-ratio: 1 / 1; background: var(--card); border: none; border-radius: var(--radius); box-shadow: var(--shadow); cursor: pointer;
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; padding: 12px; font-family: inherit; color: var(--text);
+    transition: transform .1s, box-shadow .1s; }
+  .tuile:active { transform: scale(.97); }
+  .tuile:hover { box-shadow: 0 4px 18px rgba(204,0,0,.18); }
+  .tuile .ic { font-size: 46px; line-height: 1; }
+  .tuile .nom { font-size: 18px; font-weight: 800; }
+  .tuile .info { font-size: 12px; color: var(--text-dim); font-weight: 600; text-align: center; min-height: 15px; }
+  .tuile .info.alerte { color: var(--warn); }
+  .retour { margin-bottom: 10px; }
   .nav button.active { color: var(--red); }
 
   /* Listes */
@@ -231,6 +242,13 @@
     <!-- Accueil (écrans chauffeur ajoutés au fur et à mesure) -->
     <section class="view active" id="view-accueil">
       <h2 id="welcome"></h2>
+      <!-- Administrateur : accès aux onglets en tuiles -->
+      <div class="tuiles hidden" id="adminTuiles">
+        <button class="tuile" onclick="showView('journees')"><span class="ic">📋</span><span class="nom">Journées</span><span class="info" id="tuileJournees"></span></button>
+        <button class="tuile" onclick="showView('chauffeurs')"><span class="ic">👥</span><span class="nom">Chauffeurs</span><span class="info" id="tuileChauffeurs"></span></button>
+        <button class="tuile" onclick="showView('camions')"><span class="ic">🚛</span><span class="nom">Camions</span><span class="info" id="tuileCamions"></span></button>
+        <button class="tuile" onclick="showView('centrales')"><span class="ic">🏭</span><span class="nom">Centrales</span><span class="info" id="tuileCentrales"></span></button>
+      </div>
       <!-- Chauffeur : choix du camion du jour -->
       <div class="card hidden" id="camionCard" style="max-width:none;margin-bottom:16px">
         <div class="card-title" id="camionCardTitle">🚛 Mon camion du jour</div>
@@ -303,6 +321,7 @@
 
     <!-- Administration : chauffeurs -->
     <section class="view" id="view-chauffeurs">
+      <button class="btn btn-secondary btn-small retour" onclick="showView('accueil')">← Accueil</button>
       <h2>Chauffeurs</h2>
       <div class="card" style="max-width:none;margin-bottom:16px">
         <div class="card-title">➕ Ajouter un chauffeur</div>
@@ -321,6 +340,7 @@
 
     <!-- Administration : centrales à béton -->
     <section class="view" id="view-centrales">
+      <button class="btn btn-secondary btn-small retour" onclick="showView('accueil')">← Accueil</button>
       <h2>Centrales à béton</h2>
       <div class="card" style="max-width:none;margin-bottom:16px">
         <div class="card-title">➕ Ajouter une centrale</div>
@@ -337,6 +357,7 @@
 
     <!-- Administration : journées des chauffeurs (tours, bons de livraison, lettres de voiture) -->
     <section class="view" id="view-journees">
+      <button class="btn btn-secondary btn-small retour" onclick="showView('accueil')">← Accueil</button>
       <h2>Journées</h2>
       <div class="filters">
         <div class="field"><select id="filtChauffeur" onchange="renderJournees()"><option value="">Tous les chauffeurs</option></select></div>
@@ -354,6 +375,7 @@
 
     <!-- Administration : camions -->
     <section class="view" id="view-camions">
+      <button class="btn btn-secondary btn-small retour" onclick="showView('accueil')">← Accueil</button>
       <h2>Camions</h2>
       <div class="card" style="max-width:none;margin-bottom:16px">
         <div class="card-title">➕ Ajouter un camion</div>
@@ -419,7 +441,7 @@
 <script>
 // ── Version ──────────────────────────────────────────────────────────────────
 // ⚠️ Changer ce numéro à chaque modification du code
-var APP_VERSION = '0.20';
+var APP_VERSION = '0.21';
 
 // ── Firebase ─────────────────────────────────────────────────────────────────
 // Même projet Firebase que Suivi Parc et Carburant, mais toutes les données
@@ -617,6 +639,7 @@ function doLogout() {
   histoOuvert = false; histoJournees = [];
   $('histoBtn').textContent = '📅 Voir mes journées passées'; $('histoZone').classList.add('hidden'); $('histoCard').classList.add('hidden');
   $('bientotCard').classList.remove('hidden');
+  $('adminTuiles').classList.add('hidden');
   me = null; allUsers = {}; allCamions = {}; affectations = {}; mesTours = {}; allCentrales = {};
   $('loginPwd').value = '';
   showScreen('loginScreen');
@@ -627,12 +650,17 @@ function startApp(u) {
   storeSet(SESSION_KEY, JSON.stringify({ id: u.id, ts: Date.now() }));
   $('topUser').innerHTML = '<b>' + escHtml(me.nom) + '</b><span>' + roleOf(me).label + '</span>';
   $('welcome').textContent = 'Bonjour ' + me.nom;
-  $('nav').classList.toggle('hidden', !can('admin'));
+  // Administrateur : les onglets sont des tuiles sur l'accueil (plus de barre en bas)
+  $('nav').classList.add('hidden');
+  $('adminTuiles').classList.toggle('hidden', !can('admin'));
+  if (can('admin')) $('bientotCard').classList.add('hidden');
   $('cRole').innerHTML = Object.keys(ROLES).map(function(r) {
     return '<option value="' + r + '">' + ROLES[r].label + '</option>';
   }).join('');
   $('tType').innerHTML = TYPES_CAMION.map(function(t) { return '<option>' + t + '</option>'; }).join('');
   $('camionCard').classList.toggle('hidden', me.role !== 'chauffeur');
+  // Cartes propres au chauffeur : masquées pour les autres rôles (au cas où un chauffeur était connecté avant)
+  if (me.role !== 'chauffeur') ['tourCard', 'suiteCard', 'finCard', 'histoCard'].forEach(function(id) { $(id).classList.add('hidden'); });
   showScreen('app');
   showView('accueil');
   subscribeCamions();
@@ -646,6 +674,25 @@ function showView(v) {
     $('nav-' + n).classList.toggle('active', n === v);
   });
   window.scrollTo(0, 0);
+}
+// Petits chiffres sous chaque tuile de l'accueil administrateur
+function majTuiles() {
+  if (!can('admin')) return;
+  var aSaisir = 0, enCours = 0;
+  Object.keys(toutesFins).forEach(function(jk) {
+    Object.values(toutesFins[jk] || {}).forEach(function(f) { if (f.valideLe && !f.saisi) aSaisir++; });
+  });
+  Object.keys(tousTours).forEach(function(jk) {
+    Object.keys(tousTours[jk] || {}).forEach(function(cid) { if (!((toutesFins[jk] || {})[cid] || {}).valideLe) enCours++; });
+  });
+  $('tuileJournees').textContent = aSaisir ? aSaisir + ' à saisir' : enCours ? enCours + ' en cours' : 'Tout est saisi';
+  $('tuileJournees').classList.toggle('alerte', aSaisir > 0);
+  var nbCh = Object.values(allUsers).filter(function(u) { return u.role === 'chauffeur' && u.actif !== false; }).length;
+  $('tuileChauffeurs').textContent = nbCh + ' chauffeur' + (nbCh > 1 ? 's' : '') + ' actif' + (nbCh > 1 ? 's' : '');
+  var cams = Object.values(allCamions), pris = cams.filter(function(c) { return affectations[c.plaque]; }).length;
+  $('tuileCamions').textContent = cams.length + ' camion' + (cams.length > 1 ? 's' : '') + ' — ' + pris + ' sorti' + (pris > 1 ? 's' : '');
+  var nbC = Object.values(allCentrales).filter(function(c) { return c.actif !== false; }).length;
+  $('tuileCentrales').textContent = nbC + ' en service';
 }
 
 // ── Données temps réel (administrateur) ──────────────────────────────────────
@@ -764,6 +811,7 @@ function refreshChauffeurFilter() {
 }
 function renderJournees() {
   if (!can('admin')) return;
+  majTuiles();
   var list = filteredJournees();
   var nbASaisir = list.filter(function(j) { return j.terminee && !j.fin.saisi; }).length;
   var nbEnCours = list.filter(function(j) { return !j.terminee; }).length;
@@ -1548,6 +1596,7 @@ function fmtPos(c) { return c.lat != null ? c.lat.toFixed(5) + ', ' + c.lng.toFi
 
 function renderCentrales() {
   if (!can('admin')) return;
+  majTuiles();
   var list = centralesTriees();
   var aRegler = list.filter(function(c) { return c.provisoire || c.lat == null; }).length;
   $('centralesCount').textContent = list.length + ' centrale' + (list.length > 1 ? 's' : '') +
@@ -1640,6 +1689,7 @@ function changerCamion() {
 
 // ── Chauffeurs (comptes) ─────────────────────────────────────────────────────
 function renderUsers() {
+  majTuiles();
   var users = Object.values(allUsers).sort(byNom);
   var nbChauffeurs = users.filter(function(u) { return u.role === 'chauffeur' && u.actif !== false; }).length;
   $('usersCount').textContent = users.length + ' compte' + (users.length > 1 ? 's' : '') + ' — ' + nbChauffeurs + ' chauffeur' + (nbChauffeurs > 1 ? 's' : '') + ' actif' + (nbChauffeurs > 1 ? 's' : '');
@@ -1716,6 +1766,7 @@ function renderCamions() {
   var list = Object.values(allCamions).sort(function(a, b) { return a.plaque.localeCompare(b.plaque); });
   var actifs = list.filter(function(c) { return c.actif !== false; }).length;
   if (!can('admin')) return;
+  majTuiles();
   var nbPris = list.filter(function(c) { return affectations[c.plaque]; }).length;
   $('camionsCount').textContent = list.length + ' camion' + (list.length > 1 ? 's' : '') + (list.length !== actifs ? ' — ' + actifs + ' en service' : '') +
     ' — ' + nbPris + ' pris aujourd\'hui';
