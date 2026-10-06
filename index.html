@@ -34,7 +34,7 @@
 
   .field { margin-bottom: 14px; }
   .field label { font-size: 12px; font-weight: 600; color: var(--text-dim); display: block; margin-bottom: 6px; }
-  .field input, .field select, .field textarea {
+  .field input, .field select, .field textarea, .plan-nav input {
     width: 100%; padding: 13px 14px; font-size: 16px; font-family: inherit; border: 1.5px solid var(--border);
     border-radius: 10px; background: #fafafa; color: var(--text); outline: none; -webkit-appearance: none; appearance: none;
   }
@@ -188,6 +188,18 @@
   .dlg-msg { font-size: 15px; line-height: 1.45; margin-bottom: 16px; }
   .dlg .field { margin-bottom: 16px; }
   .dlg-btns { display: flex; gap: 8px; }
+  .plan-ligne { display: flex; gap: 10px; align-items: flex-start; padding: 9px 0; border-top: 1px solid var(--border); font-size: 14px; }
+  .plan-ligne:first-child { border-top: none; }
+  .plan-ligne .h { font-weight: 800; min-width: 48px; color: var(--red); }
+  .plan-ligne .txt { flex: 1; min-width: 0; }
+  .plan-ligne .acts { display: flex; gap: 6px; }
+  .plan-nav { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
+  .plan-nav input { flex: 1; }
+  .plan-jour { margin-bottom: 14px; }
+  .plan-jour:last-child { margin-bottom: 0; }
+  .plan-jour-titre { font-weight: 800; margin-bottom: 4px; }
+  .tag.envoye { background: #e8f1fb; color: #1f5fa8; }
+  .tag.modifie { background: #fff4e0; color: var(--warn); }
   .docs-panel { max-width: 520px; max-height: calc(100vh - 32px); overflow-y: auto; }
   .docs-panel .dlg-titre { margin-bottom: 4px; }
   .doc-item { display: flex; gap: 10px; align-items: center; padding: 10px 0; border-bottom: 1px solid var(--border); }
@@ -257,9 +269,15 @@
       <!-- Administrateur : accès aux onglets en tuiles -->
       <div class="tuiles hidden" id="adminTuiles">
         <button class="tuile" onclick="showView('journees')"><span class="ic">📋</span><span class="nom">Journées</span><span class="info" id="tuileJournees"></span></button>
-        <button class="tuile" onclick="showView('chauffeurs')"><span class="ic">👥</span><span class="nom">Chauffeurs</span><span class="info" id="tuileChauffeurs"></span></button>
-        <button class="tuile" onclick="showView('camions')"><span class="ic">🚛</span><span class="nom">Camions</span><span class="info" id="tuileCamions"></span></button>
-        <button class="tuile" onclick="showView('centrales')"><span class="ic">🏭</span><span class="nom">Centrales</span><span class="info" id="tuileCentrales"></span></button>
+        <button class="tuile" onclick="showView('planning')"><span class="ic">🗓️</span><span class="nom">Planning</span><span class="info" id="tuilePlanning"></span></button>
+        <button class="tuile" data-admin="1" onclick="showView('chauffeurs')"><span class="ic">👥</span><span class="nom">Chauffeurs</span><span class="info" id="tuileChauffeurs"></span></button>
+        <button class="tuile" data-admin="1" onclick="showView('camions')"><span class="ic">🚛</span><span class="nom">Camions</span><span class="info" id="tuileCamions"></span></button>
+        <button class="tuile" data-admin="1" onclick="showView('centrales')"><span class="ic">🏭</span><span class="nom">Centrales</span><span class="info" id="tuileCentrales"></span></button>
+      </div>
+      <!-- Chauffeur : planning envoyé par le bureau (aujourd'hui et demain) -->
+      <div class="card hidden" id="planCard" style="max-width:none;margin-bottom:16px">
+        <div class="card-title">🗓️ Ma convocation</div>
+        <div id="planContenu"></div>
       </div>
       <!-- Chauffeur : choix du camion du jour -->
       <div class="card hidden" id="camionCard" style="max-width:none;margin-bottom:16px">
@@ -385,6 +403,22 @@
       <div id="journeesList"></div>
     </section>
 
+    <!-- Administration / bureau : planning des chauffeurs, envoyé la veille -->
+    <section class="view" id="view-planning">
+      <button class="btn btn-secondary btn-small retour" onclick="showView('accueil')">← Accueil</button>
+      <h2>Planning</h2>
+      <div class="plan-nav">
+        <button class="btn btn-secondary btn-small" onclick="decalerPlanning(-1)">◀</button>
+        <input id="planDate" type="date" onchange="suivrePlanning()">
+        <button class="btn btn-secondary btn-small" onclick="decalerPlanning(1)">▶</button>
+      </div>
+      <div class="summary export">
+        <span id="planningCount"></span>
+        <button class="btn btn-primary btn-small" id="planEnvoiTous" onclick="envoyerPlanning()">📤 Envoyer à tous</button>
+      </div>
+      <div id="planningList"></div>
+    </section>
+
     <!-- Administration : camions -->
     <section class="view" id="view-camions">
       <button class="btn btn-secondary btn-small retour" onclick="showView('accueil')">← Accueil</button>
@@ -419,7 +453,7 @@
     <div class="dlg-titre" id="docsTitre"></div>
     <div class="item-sub" style="text-align:center" id="docsCount"></div>
     <div id="docsList"></div>
-    <div class="doc-ajout">
+    <div class="doc-ajout" id="docAjoutZone">
       <div class="field"><label>Type de document *</label><select id="docType"></select></div>
       <div class="field hidden" id="docAutreField"><label>Nom du document *</label><input id="docAutre" autocomplete="off" placeholder="Ex : Attestation ADR"></div>
       <div class="field" id="docExpireField"><label>Date d'expiration</label><input id="docExpire" type="date"></div>
@@ -427,6 +461,20 @@
       <button class="btn btn-primary" id="docAjoutBtn" onclick="choisirFichierDoc()">📎 Ajouter un PDF ou une photo</button>
     </div>
     <button class="btn btn-secondary" style="margin-top:10px;width:100%" onclick="fermerDocs()">Fermer</button>
+  </div>
+</div>
+
+<!-- Planning : convocation d'un chauffeur (centrale, heure, camion) -->
+<div class="dlg-bg hidden" id="planBg" onclick="if(event.target===this)fermerLignePlan()">
+  <div class="dlg docs-panel" role="dialog" aria-modal="true">
+    <div class="dlg-titre" id="planTitre"></div>
+    <div class="field"><label>Centrale de convocation *</label><select id="pCentrale"></select></div>
+    <div class="field"><label>Heure *</label><input id="pHeure" type="time"></div>
+    <div class="field"><label>Camion *</label><select id="pCamion"></select></div>
+    <div class="dlg-btns">
+      <button class="btn btn-secondary" style="flex:1" onclick="fermerLignePlan()">Annuler</button>
+      <button class="btn btn-primary" style="flex:2" onclick="enregistrerLignePlan()">✅ Enregistrer</button>
+    </div>
   </div>
 </div>
 
@@ -470,7 +518,7 @@
 <script>
 // ── Version ──────────────────────────────────────────────────────────────────
 // ⚠️ Changer ce numéro à chaque modification du code
-var APP_VERSION = '0.26';
+var APP_VERSION = '0.27';
 
 // ── Firebase ─────────────────────────────────────────────────────────────────
 // Même projet Firebase que Suivi Parc et Carburant, mais toutes les données
@@ -776,6 +824,7 @@ function doLogout() {
   if (tousToursRef) tousToursRef.off();
   if (docsRef) docsRef.off();
   allDocs = {}; fermerDocs();
+  arreterPlanning(); fermerLignePlan();
   if (toutesFinsRef) toutesFinsRef.off();
   tousTours = {}; toutesFins = {};
   maFin = null; finOuvert = false; maJournee = '';
@@ -796,8 +845,8 @@ function startApp(u) {
   // Administrateur : les onglets sont des tuiles sur l'accueil (plus de barre en bas)
   $('nav').classList.add('hidden');
   $('adminTuiles').classList.toggle('hidden', !can('journees'));
-  // Bureau / exploitation : seulement la tuile Journées
-  Array.prototype.forEach.call(document.querySelectorAll('#adminTuiles .tuile'), function(b, i) { b.classList.toggle('hidden', i > 0 && !can('admin')); });
+  // Bureau / exploitation : seulement les tuiles Journées et Planning
+  Array.prototype.forEach.call(document.querySelectorAll('#adminTuiles .tuile'), function(b) { b.classList.toggle('hidden', !!b.dataset.admin && !can('admin')); });
   if (can('journees')) $('bientotCard').classList.add('hidden');
   // Repère public « un administrateur existe » : l'écran de création reste caché une fois la base verrouillée
   if (can('admin')) db.ref(ROOT + '/reglages/initialise').set(true).catch(function() {});
@@ -811,15 +860,16 @@ function startApp(u) {
   showScreen('app');
   showView('accueil');
   subscribeCamions();
-  if (can('journees')) subscribeJournees();
+  if (can('journees')) { subscribeJournees(); subscribePlanning(); }
   if (can('admin')) subscribeAdmin();
+  if (me.role === 'chauffeur') suivreMonPlanning();
 }
 
 // ── Navigation ───────────────────────────────────────────────────────────────
 function showView(v) {
-  ['accueil', 'journees', 'chauffeurs', 'camions', 'centrales'].forEach(function(n) {
+  ['accueil', 'journees', 'planning', 'chauffeurs', 'camions', 'centrales'].forEach(function(n) {
     $('view-' + n).classList.toggle('active', n === v);
-    $('nav-' + n).classList.toggle('active', n === v);
+    if ($('nav-' + n)) $('nav-' + n).classList.toggle('active', n === v);
   });
   window.scrollTo(0, 0);
 }
@@ -835,6 +885,7 @@ function majTuiles() {
   });
   $('tuileJournees').textContent = aSaisir ? aSaisir + ' à saisir' : enCours ? enCours + ' en cours' : 'Tout est saisi';
   $('tuileJournees').classList.toggle('alerte', aSaisir > 0);
+  majTuilePlanning();
   if (!can('admin')) return;
   var nbCh = Object.values(allUsers).filter(function(u) { return u.role === 'chauffeur' && u.actif !== false; }).length;
   $('tuileChauffeurs').textContent = nbCh + ' chauffeur' + (nbCh > 1 ? 's' : '') + ' actif' + (nbCh > 1 ? 's' : '');
@@ -892,12 +943,12 @@ function journeeSuivante() {
   return maJournee === jourAffect ? jourAffect + '-2' : m && m[1] === jourAffect ? jourAffect + '-' + (Number(m[2]) + 1) : jourAffect;
 }
 document.addEventListener('visibilitychange', function() {
-  if (me && document.visibilityState === 'visible' && jourAffect !== todayStr()) suivreJour();
+  if (me && document.visibilityState === 'visible' && jourAffect !== todayStr()) { suivreJour(); if (me.role === 'chauffeur') suivreMonPlanning(); }
 });
 
 function subscribeAdmin() {
   usersRef = db.ref(ROOT + '/users');
-  usersRef.on('value', function(snap) { allUsers = snap.val() || {}; renderUsers(); refreshChauffeurFilter(); renderJournees(); });
+  usersRef.on('value', function(snap) { allUsers = snap.val() || {}; renderUsers(); refreshChauffeurFilter(); renderJournees(); majAnnuaire(); });
   // Liste des documents des chauffeurs (les fichiers eux-mêmes sont rangés à part)
   docsRef = db.ref(ROOT + '/docsChauffeurs');
   docsRef.on('value', function(snap) { allDocs = snap.val() || {}; renderUsers(); renderCamions(); renderDocs(); });
@@ -1132,7 +1183,9 @@ function renderCamionJour() {
     $('camionPris').innerHTML = '<span class="plaque">' + escHtml(p) + '</span>' +
       (descCamion(c) ? '<div class="item-sub"><b>' + escHtml(descCamion(c)) + '</b></div>' : '') +
       '<div class="item-sub">Pris à ' + heure(affectations[p].ts) + '</div>' +
-      '<button class="btn btn-secondary" onclick="changerCamion()">🔄 Changer de camion</button>';
+      '<div class="input-row" style="justify-content:center;flex-wrap:wrap">' +
+        '<button class="btn btn-secondary" onclick="changerCamion()">🔄 Changer de camion</button>' +
+        '<button class="btn btn-secondary" onclick="ouvrirDocsCamionChauffeur(\'' + escHtml(p) + '\')">📁 Documents du camion</button></div>';
     return;
   }
   $('camionCardTitle').textContent = '🚛 Choisissez votre camion du jour';
@@ -1985,9 +2038,24 @@ function ouvrirDocs(uid) {
   $('docsBg').classList.remove('hidden');
   renderDocs();
 }
-function fermerDocs() { docsUser = null; $('docsBg').classList.add('hidden'); }
+function fermerDocs() { docsUser = null; if (docsCamionRef) { docsCamionRef.off(); docsCamionRef = null; } $('docsBg').classList.add('hidden'); }
+// Chauffeur : consultation seule des documents du camion qu'il a pris (carte grise, assurance…)
+var docsCamionRef = null;
+function ouvrirDocsCamionChauffeur(plaque) {
+  var cle = cleDocsCamion(plaque);
+  docsUser = cle;
+  $('docsList').innerHTML = '<div class="empty">Chargement…</div>';
+  $('docsTitre').textContent = '📁 Documents — ' + plaque; $('docsCount').textContent = '';
+  $('docsBg').classList.remove('hidden');
+  if (docsCamionRef) docsCamionRef.off();
+  docsCamionRef = db.ref(ROOT + '/docsChauffeurs/' + cle);
+  docsCamionRef.on('value', function(snap) { allDocs[cle] = snap.val() || {}; renderDocs(); },
+    function() { $('docsList').innerHTML = '<div class="empty">Documents non accessibles</div>'; });
+}
 function renderDocs() {
   if (!docsUser) return;
+  var lecture = !can('admin');  // chauffeur : consultation seule
+  $('docAjoutZone').classList.toggle('hidden', lecture);
   var docs = Object.keys(allDocs[docsUser] || {}).map(function(k) { return Object.assign({ key: k }, allDocs[docsUser][k]); })
     .sort(function(a, b) { return a.type.localeCompare(b.type) || b.ajouteLe - a.ajouteLe; });
   $('docsTitre').textContent = '📁 Documents — ' + (docsUser.indexOf('camion_') === 0 ? docsUser.slice(7) : nomDocs(docsUser));
@@ -1999,8 +2067,8 @@ function renderDocs() {
       (d.expire && docsUser.indexOf('camion_') !== 0 ? '<div class="item-sub exp-' + e + '">' + (e === 'passe' ? '⛔ Expiré le ' : e === 'bientot' ? '⚠️ Expire le ' : 'Valable jusqu\'au ') +
         new Date(d.expire + 'T12:00:00').toLocaleDateString('fr-FR') + '</div>' : '') +
       '</div><div class="acts"><button class="btn btn-secondary btn-small" onclick="voirDoc(' + k + ')">👁️</button>' +
-      '<button class="btn btn-danger btn-small" onclick="supprimerDoc(' + k + ')">🗑️</button></div></div>';
-  }).join('') : '<div class="empty">Aucun document pour l\'instant</div>';
+      (lecture ? '' : '<button class="btn btn-danger btn-small" onclick="supprimerDoc(' + k + ')">🗑️</button>') + '</div></div>';
+  }).join('') : '<div class="empty">' + (lecture ? 'Aucun document pour ce camion — demandez au bureau' : 'Aucun document pour l\'instant') + '</div>';
 }
 function choisirFichierDoc() {
   var type = $('docType').value;
@@ -2081,6 +2149,201 @@ function supprimerDoc(key) {
     updates[ROOT + '/docsFichiers/' + uid + '/' + key] = null;
     db.ref().update(updates).then(function() { showToast('Document supprimé'); });
   });
+}
+
+// ── Planning : préparé par le bureau, envoyé la veille au soir aux chauffeurs ─
+// planning/{date}/{chauffeur}/{clé} = une livraison prévue (heure, centrale, client, m³, adresse, remarque)
+// planningEnvoi/{date}/{chauffeur} = { envoyeLe, envoyePar, modifieLe, luLe } : le chauffeur ne voit son planning qu'une fois envoyé
+// annuaire/{id} = { nom, role, actif } : liste des chauffeurs lisible par le bureau (tenue à jour par l'administrateur)
+var annuaire = {}, annuaireRef = null, planRef = null, planEnvoiRef = null, planning = {}, planningEnvoi = {}, planDateSuivie = '';
+var monPlanRefs = [], monPlan = {}, ligneEdit = null;
+function decalerJour(d, n) { var x = new Date(d + 'T12:00:00'); x.setDate(x.getDate() + n); return x.getFullYear() + '-' + pad2(x.getMonth() + 1) + '-' + pad2(x.getDate()); }
+function demainStr() { return decalerJour(todayStr(), 1); }
+function majAnnuaire() {
+  var a = {};
+  Object.values(allUsers).forEach(function(u) { if (u && u.id) a[u.id] = { nom: u.nom, role: u.role || 'chauffeur', actif: u.actif !== false }; });
+  if (JSON.stringify(a) === JSON.stringify(annuaire)) return;
+  db.ref(ROOT + '/annuaire').set(a).catch(function() {});
+}
+function subscribePlanning() {
+  annuaireRef = db.ref(ROOT + '/annuaire');
+  annuaireRef.on('value', function(snap) { annuaire = snap.val() || {}; renderPlanning(); });
+  if (!$('planDate').value) $('planDate').value = demainStr();
+  suivrePlanning();
+}
+function suivrePlanning() {
+  var d = $('planDate').value || demainStr();
+  if (d === planDateSuivie) return;
+  planDateSuivie = d;
+  if (planRef) planRef.off();
+  if (planEnvoiRef) planEnvoiRef.off();
+  planning = {}; planningEnvoi = {};
+  planRef = db.ref(ROOT + '/planning/' + d);
+  planRef.on('value', function(snap) { planning = snap.val() || {}; renderPlanning(); });
+  planEnvoiRef = db.ref(ROOT + '/planningEnvoi/' + d);
+  planEnvoiRef.on('value', function(snap) { planningEnvoi = snap.val() || {}; renderPlanning(); });
+}
+function decalerPlanning(n) { $('planDate').value = decalerJour($('planDate').value || demainStr(), n); suivrePlanning(); }
+function arreterPlanning() {
+  [annuaireRef, planRef, planEnvoiRef].concat(monPlanRefs).forEach(function(r) { if (r) r.off(); });
+  annuaireRef = planRef = planEnvoiRef = null; monPlanRefs = []; monPlan = {};
+  annuaire = {}; planning = {}; planningEnvoi = {}; planDateSuivie = '';
+  $('planCard').classList.add('hidden');
+}
+// État d'envoi d'un chauffeur pour la date affichée
+function etatPlanning(cid) {
+  var e = planningEnvoi[cid] || {}, n = planning[cid] && planning[cid].heure ? 1 : 0;
+  if (!e.envoyeLe) return n ? 'brouillon' : 'vide';
+  if (e.modifieLe && e.modifieLe > e.envoyeLe) return 'modifie';
+  return e.luLe && e.luLe > e.envoyeLe ? 'lu' : 'envoye';
+}
+function chauffeursPlanning() {
+  var ids = {};
+  Object.keys(annuaire).forEach(function(id) { var u = annuaire[id]; if (u.role === 'chauffeur' && u.actif !== false) ids[id] = u.nom; });
+  // Un chauffeur désactivé depuis garde son planning visible
+  Object.keys(planning).forEach(function(id) { if (!ids[id]) ids[id] = (annuaire[id] || {}).nom || id; });
+  return Object.keys(ids).map(function(id) { return { id: id, nom: ids[id] }; }).sort(function(a, b) { return a.nom.localeCompare(b.nom); });
+}
+// Convocation : « 07:30 — Rodez — 🚛 AB-123-CD »
+function texteConvocation(c) {
+  return '<b>' + escHtml(c.heure || '') + '</b> à <b>' + escHtml(c.centrale || '') + '</b>' +
+    (c.plaque ? ' — 🚛 <span class="plaque" style="font-size:12px">' + escHtml(c.plaque) + '</span>' : '');
+}
+function majTuilePlanning() {
+  if (!$('tuilePlanning')) return;
+  if (planDateSuivie !== demainStr()) { $('tuilePlanning').textContent = ''; return; }
+  var ch = chauffeursPlanning(), env = ch.filter(function(c) { return ['envoye', 'lu'].indexOf(etatPlanning(c.id)) !== -1; }).length;
+  $('tuilePlanning').textContent = 'Demain : ' + env + '/' + ch.length + ' envoyé' + (env > 1 ? 's' : '');
+}
+function renderPlanning() {
+  if (!can('journees')) return;
+  majTuilePlanning();
+  var d = planDateSuivie, ch = chauffeursPlanning();
+  var etats = ch.map(function(c) { return etatPlanning(c.id); });
+  var nb = function(x) { return etats.filter(function(e) { return x.indexOf(e) !== -1; }).length; };
+  var aEnvoyer = nb(['brouillon', 'modifie']);
+  $('planningCount').textContent = fmtJour(d) + (d === demainStr() ? ' (demain)' : d === todayStr() ? ' (aujourd\'hui)' : '') + ' — ' +
+    nb(['envoye', 'lu']) + ' envoyé' + (nb(['envoye', 'lu']) > 1 ? 's' : '') + ', ' + nb(['lu']) + ' vu' + (nb(['lu']) > 1 ? 's' : '') +
+    (aEnvoyer ? ', ' + aEnvoyer + ' à envoyer' : '');
+  $('planEnvoiTous').disabled = !aEnvoyer;
+  if (!ch.length) { $('planningList').innerHTML = '<div class="empty">Aucun chauffeur actif — créez les comptes dans l\'onglet Chauffeurs</div>'; return; }
+  // Camion déjà donné à un autre chauffeur ce jour-là
+  var plaques = {};
+  ch.forEach(function(c) { var p = (planning[c.id] || {}).plaque; if (p) plaques[p] = (plaques[p] || 0) + 1; });
+  $('planningList').innerHTML = ch.map(function(c) {
+    var cv = planning[c.id] && planning[c.id].heure ? planning[c.id] : null, e = etatPlanning(c.id), env = planningEnvoi[c.id] || {}, id = "'" + escHtml(c.id) + "'";
+    var tag = e === 'vide' ? '' : e === 'brouillon' ? '<span class="tag asaisir">✏️ Pas encore envoyé</span>'
+      : e === 'modifie' ? '<span class="tag modifie">⚠️ Modifié — renvoyez pour prévenir</span>'
+      : e === 'lu' ? '<span class="tag saisi">✅ Vu à ' + heure(env.luLe) + '</span>' : '<span class="tag envoye">📤 Envoyé à ' + heure(env.envoyeLe) + '</span>';
+    return '<div class="item"><div class="item-head"><b>👤 ' + escHtml(c.nom) + '</b>' + tag + '</div>' +
+      (cv ? '<div class="item-body"><div>🕒 ' + texteConvocation(cv) + '</div>' +
+          (plaques[cv.plaque] > 1 ? '<div class="item-sub" style="color:var(--warn)">⚠️ Ce camion est aussi donné à un autre chauffeur</div>' : '') + '</div>'
+        : '<div class="item-sub" style="margin-top:6px">Pas de convocation</div>') +
+      '<div class="item-actions">' + (cv
+        ? '<button class="btn btn-secondary btn-small" onclick="ouvrirLignePlan(' + id + ')">✏️ Modifier</button>' +
+          '<button class="btn btn-danger btn-small" onclick="supprimerLignePlan(' + id + ')">🗑️</button>'
+        : '<button class="btn btn-secondary btn-small" onclick="ouvrirLignePlan(' + id + ')">➕ Convoquer</button>') +
+        (e === 'brouillon' || e === 'modifie' ? '<button class="btn btn-primary btn-small" onclick="envoyerPlanning(' + id + ')">📤 Envoyer</button>' : '') +
+      '</div></div>';
+  }).join('');
+}
+function ouvrirLignePlan(cid) {
+  var cv = planning[cid] && planning[cid].heure ? planning[cid] : null;
+  ligneEdit = { cid: cid, date: planDateSuivie };
+  var noms = centralesTriees().filter(function(c) { return c.actif !== false; }).map(function(c) { return c.nom; });
+  if (cv && cv.centrale && noms.indexOf(cv.centrale) === -1) noms.push(cv.centrale);
+  $('pCentrale').innerHTML = '<option value="">— Choisir la centrale —</option>' + noms.map(function(n) { return '<option>' + escHtml(n) + '</option>'; }).join('');
+  // Camions en service ; ceux déjà donnés à un autre chauffeur ce jour-là sont signalés
+  var pris = {};
+  Object.keys(planning).forEach(function(id) { if (id !== cid && planning[id] && planning[id].plaque) pris[planning[id].plaque] = (annuaire[id] || {}).nom || id; });
+  var cams = Object.values(allCamions).filter(function(c) { return c.actif !== false || (cv && cv.plaque === c.plaque); })
+    .sort(function(a, b) { return a.plaque.localeCompare(b.plaque); });
+  $('pCamion').innerHTML = '<option value="">— Choisir le camion —</option>' + cams.map(function(c) {
+    return '<option value="' + escHtml(c.plaque) + '">' + escHtml(c.plaque) + (c.parc ? ' (' + escHtml(c.parc) + ')' : '') + (c.type ? ' — ' + escHtml(c.type) : '') +
+      (pris[c.plaque] ? ' — déjà pour ' + escHtml(pris[c.plaque]) : '') + '</option>';
+  }).join('');
+  $('pCentrale').value = cv ? cv.centrale || '' : '';
+  $('pHeure').value = cv ? cv.heure || '' : '';
+  $('pCamion').value = cv ? cv.plaque || '' : '';
+  $('planTitre').textContent = '🗓️ ' + ((annuaire[cid] || {}).nom || cid) + ' — ' + fmtJour(planDateSuivie);
+  $('planBg').classList.remove('hidden');
+}
+function fermerLignePlan() { ligneEdit = null; $('planBg').classList.add('hidden'); }
+function enregistrerLignePlan() {
+  if (!ligneEdit) return;
+  var c = $('pCentrale').value, h = $('pHeure').value, p = $('pCamion').value;
+  if (!c) { showToast('Choisissez la centrale de convocation'); $('pCentrale').focus(); return; }
+  if (!h) { showToast('Indiquez l\'heure'); $('pHeure').focus(); return; }
+  if (!p) { showToast('Choisissez le camion'); $('pCamion').focus(); return; }
+  var le = ligneEdit, ancien = planning[le.cid] || {}, updates = {};
+  updates[ROOT + '/planning/' + le.date + '/' + le.cid] = { centrale: c, heure: h, plaque: p,
+    ajouteLe: ancien.ajouteLe || Date.now(), ajoutePar: ancien.ajoutePar || me.nom, modifieLe: Date.now() };
+  updates[ROOT + '/planningEnvoi/' + le.date + '/' + le.cid + '/modifieLe'] = Date.now();
+  db.ref().update(updates).then(function() { showToast('✅ Convocation enregistrée', true); fermerLignePlan(); })
+    .catch(function(e) { showToast('Erreur : ' + e.message); });
+}
+function supprimerLignePlan(cid) {
+  var d = planDateSuivie;
+  if (!planning[cid]) return;
+  confirmer('Supprimer la convocation de ' + ((annuaire[cid] || {}).nom || cid) + ' ?', { ok: 'Supprimer', danger: true }, function() {
+    var updates = {};
+    updates[ROOT + '/planning/' + d + '/' + cid] = null;
+    updates[ROOT + '/planningEnvoi/' + d + '/' + cid + '/modifieLe'] = Date.now();
+    db.ref().update(updates).then(function() { showToast('Convocation supprimée'); });
+  });
+}
+// Envoi : à un chauffeur, ou à tous ceux qui ont un planning pas encore envoyé ou modifié depuis
+function envoyerPlanning(cid) {
+  var d = planDateSuivie, cibles = cid ? [cid] : chauffeursPlanning().map(function(c) { return c.id; })
+    .filter(function(id) { return ['brouillon', 'modifie'].indexOf(etatPlanning(id)) !== -1; });
+  if (!cibles.length) return;
+  var go = function() {
+    var updates = {}, now = Date.now();
+    cibles.forEach(function(id) {
+      updates[ROOT + '/planningEnvoi/' + d + '/' + id + '/envoyeLe'] = now;
+      updates[ROOT + '/planningEnvoi/' + d + '/' + id + '/envoyePar'] = me.nom;
+    });
+    db.ref().update(updates).then(function() { showToast('📤 Planning envoyé' + (cibles.length > 1 ? ' à ' + cibles.length + ' chauffeurs' : ''), true); })
+      .catch(function(e) { showToast('Erreur : ' + e.message); });
+  };
+  if (cid) go();
+  else confirmer('Envoyer le planning du ' + fmtJour(d) + ' à ' + cibles.length + ' chauffeur' + (cibles.length > 1 ? 's' : '') + ' ?', { ok: '📤 Envoyer' }, go);
+}
+
+// Chauffeur : planning du jour et du lendemain, visible une fois envoyé
+function suivreMonPlanning() {
+  monPlanRefs.forEach(function(r) { r.off(); });
+  monPlanRefs = []; monPlan = {};
+  [todayStr(), demainStr()].forEach(function(d) {
+    monPlan[d] = { lignes: {}, envoi: {} };
+    var r1 = db.ref(ROOT + '/planning/' + d + '/' + me.id), r2 = db.ref(ROOT + '/planningEnvoi/' + d + '/' + me.id);
+    r1.on('value', function(snap) { if (monPlan[d]) { monPlan[d].lignes = snap.val() || {}; renderMonPlanning(); } });
+    r2.on('value', function(snap) { if (monPlan[d]) { monPlan[d].envoi = snap.val() || {}; renderMonPlanning(); } });
+    monPlanRefs.push(r1, r2);
+  });
+}
+function renderMonPlanning() {
+  if (!me || me.role !== 'chauffeur') return;
+  var jours = [todayStr(), demainStr()].filter(function(d) { return monPlan[d]; });
+  $('planCard').classList.remove('hidden');
+  var html = jours.map(function(d) {
+    var p = monPlan[d], e = p.envoi || {}, demain = d !== todayStr();
+    // Brouillon du bureau pas encore envoyé : rien n'est montré
+    if (!e.envoyeLe) return demain ? '<div class="plan-jour"><div class="plan-jour-titre">Demain — ' + fmtJour(d) + '</div><div class="item-sub">Pas encore de convocation pour demain</div></div>' : '';
+    var cv = p.lignes && p.lignes.heure ? p.lignes : null;
+    var vu = e.luLe && e.luLe > e.envoyeLe;
+    return '<div class="plan-jour"><div class="plan-jour-titre">' + (demain ? 'Demain' : 'Aujourd\'hui') + ' — ' + fmtJour(d) + '</div>' +
+      (cv ? '<div style="font-size:16px;margin:6px 0">🕒 Convoqué à ' + texteConvocation(cv) + '</div>' : '<div class="item-sub">Pas de convocation</div>') +
+      '<div class="item-sub">Envoyé par ' + escHtml(e.envoyePar || 'le bureau') + ' à ' + heure(e.envoyeLe) + '</div>' +
+      (vu ? '<div class="item-sub" style="color:var(--ok)">✅ Vu à ' + heure(e.luLe) + '</div>'
+          : '<button class="btn btn-primary" style="margin-top:8px" onclick="planningVu(\'' + d + '\')">👍 J\'ai bien vu ma convocation</button>') + '</div>';
+  }).join('');
+  $('planContenu').innerHTML = html || '<div class="item-sub">Pas encore de convocation</div>';
+}
+function planningVu(d) {
+  db.ref(ROOT + '/planningEnvoi/' + d + '/' + me.id + '/luLe').set(Date.now())
+    .then(function() { showToast('✅ Merci, le bureau sait que vous l\'avez vue', true); })
+    .catch(function(e) { showToast('Erreur : ' + e.message); });
 }
 
 // ── Camions ──────────────────────────────────────────────────────────────────
