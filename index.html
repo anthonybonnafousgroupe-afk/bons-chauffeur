@@ -422,7 +422,7 @@
     <div class="doc-ajout">
       <div class="field"><label>Type de document *</label><select id="docType"></select></div>
       <div class="field hidden" id="docAutreField"><label>Nom du document *</label><input id="docAutre" autocomplete="off" placeholder="Ex : Attestation ADR"></div>
-      <div class="field"><label>Date d'expiration</label><input id="docExpire" type="date"></div>
+      <div class="field" id="docExpireField"><label>Date d'expiration</label><input id="docExpire" type="date"></div>
       <input type="file" id="docFichier" accept="image/*,application/pdf" class="hidden" onchange="ajouterDoc(this)">
       <button class="btn btn-primary" id="docAjoutBtn" onclick="choisirFichierDoc()">📎 Ajouter un PDF ou une photo</button>
     </div>
@@ -470,7 +470,7 @@
 <script>
 // ── Version ──────────────────────────────────────────────────────────────────
 // ⚠️ Changer ce numéro à chaque modification du code
-var APP_VERSION = '0.25';
+var APP_VERSION = '0.26';
 
 // ── Firebase ─────────────────────────────────────────────────────────────────
 // Même projet Firebase que Suivi Parc et Carburant, mais toutes les données
@@ -1969,6 +1969,7 @@ function etatExpiration(d) {
 function resumeDocs(uid) {
   var docs = Object.values(allDocs[uid] || {});
   if (!docs.length) return '';
+  if (uid.indexOf('camion_') === 0) return ' (' + docs.length + ')';  // camions : pas d'alerte de date
   var alerte = docs.some(function(d) { return etatExpiration(d.expire) === 'passe'; }) ? ' ⛔'
     : docs.some(function(d) { return etatExpiration(d.expire) === 'bientot'; }) ? ' ⚠️' : '';
   return ' (' + docs.length + ')' + alerte;
@@ -1979,6 +1980,8 @@ function ouvrirDocs(uid) {
   $('docType').innerHTML = '<option value="">— Choisir —</option>' + types.map(function(x) { return '<option>' + escHtml(x) + '</option>'; }).join('');
   $('docType').onchange = function() { $('docAutreField').classList.toggle('hidden', $('docType').value !== 'Autre'); };
   $('docType').value = ''; $('docAutre').value = ''; $('docExpire').value = ''; $('docAutreField').classList.add('hidden');
+  // Camions : seulement les documents, sans date d'expiration
+  $('docExpireField').classList.toggle('hidden', uid.indexOf('camion_') === 0);
   $('docsBg').classList.remove('hidden');
   renderDocs();
 }
@@ -1993,7 +1996,7 @@ function renderDocs() {
     var e = etatExpiration(d.expire), k = "'" + escHtml(d.key) + "'";
     return '<div class="doc-item"><span class="ic">' + (d.mime === 'application/pdf' ? '📄' : '🖼️') + '</span><div class="txt"><b>' + escHtml(d.type) + '</b>' +
       '<div class="item-sub">' + escHtml(d.fichierNom || '') + ' — ajouté le ' + new Date(d.ajouteLe).toLocaleDateString('fr-FR') + '</div>' +
-      (d.expire ? '<div class="item-sub exp-' + e + '">' + (e === 'passe' ? '⛔ Expiré le ' : e === 'bientot' ? '⚠️ Expire le ' : 'Valable jusqu\'au ') +
+      (d.expire && docsUser.indexOf('camion_') !== 0 ? '<div class="item-sub exp-' + e + '">' + (e === 'passe' ? '⛔ Expiré le ' : e === 'bientot' ? '⚠️ Expire le ' : 'Valable jusqu\'au ') +
         new Date(d.expire + 'T12:00:00').toLocaleDateString('fr-FR') + '</div>' : '') +
       '</div><div class="acts"><button class="btn btn-secondary btn-small" onclick="voirDoc(' + k + ')">👁️</button>' +
       '<button class="btn btn-danger btn-small" onclick="supprimerDoc(' + k + ')">🗑️</button></div></div>';
