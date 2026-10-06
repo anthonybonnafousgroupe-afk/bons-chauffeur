@@ -413,7 +413,7 @@
 
 <div class="toast" id="toast"></div>
 
-<!-- Documents d'un chauffeur (permis, sécurité sociale, carte conducteur…) -->
+<!-- Documents d'un chauffeur (permis, sécurité sociale, carte conducteur…) ou d'un camion (carte grise, assurance…) -->
 <div class="dlg-bg hidden" id="docsBg" onclick="if(event.target===this)fermerDocs()">
   <div class="dlg docs-panel" role="dialog" aria-modal="true">
     <div class="dlg-titre" id="docsTitre"></div>
@@ -470,7 +470,7 @@
 <script>
 // ── Version ──────────────────────────────────────────────────────────────────
 // ⚠️ Changer ce numéro à chaque modification du code
-var APP_VERSION = '0.24';
+var APP_VERSION = '0.25';
 
 // ── Firebase ─────────────────────────────────────────────────────────────────
 // Même projet Firebase que Suivi Parc et Carburant, mais toutes les données
@@ -900,7 +900,7 @@ function subscribeAdmin() {
   usersRef.on('value', function(snap) { allUsers = snap.val() || {}; renderUsers(); refreshChauffeurFilter(); renderJournees(); });
   // Liste des documents des chauffeurs (les fichiers eux-mêmes sont rangés à part)
   docsRef = db.ref(ROOT + '/docsChauffeurs');
-  docsRef.on('value', function(snap) { allDocs = snap.val() || {}; renderUsers(); renderDocs(); });
+  docsRef.on('value', function(snap) { allDocs = snap.val() || {}; renderUsers(); renderCamions(); renderDocs(); });
 }
 // Toutes les journées (sans les photos, rangées à part) : administrateur et bureau / exploitation
 function subscribeJournees() {
@@ -1950,9 +1950,14 @@ function deleteUser(id) {
   });
 }
 
-// ── Documents des chauffeurs (PDF ou photo) ──────────────────────────────────
+// ── Documents des chauffeurs et des camions (PDF ou photo) ───────────────────
+// Rangés au même endroit : clé = identifiant du chauffeur, ou « camion_ » + plaque pour un camion
 var TYPES_DOC = ['Permis de conduire', 'Carte vitale / sécurité sociale', 'Carte conducteur (chronotachygraphe)', "Carte d'identité",
   'FIMO / FCO', 'Visite médicale', 'Contrat de travail', 'Autre'];
+var TYPES_DOC_CAMION = ['Carte grise', 'Assurance (carte verte)', 'Contrôle technique', 'Chronotachygraphe (contrôle périodique)',
+  'Licence communautaire / copie conforme', 'Contrat de location / crédit-bail', 'Autre'];
+function cleDocsCamion(plaque) { return 'camion_' + plaque; }
+function nomDocs(cle) { return cle.indexOf('camion_') === 0 ? 'camion ' + cle.slice(7) : (allUsers[cle] || {}).nom || cle; }
 var DOC_MAX_PDF = 5 * 1024 * 1024;  // 5 Mo par PDF
 function joursAvant(d) { return Math.round((new Date(d + 'T12:00:00') - new Date(todayStr() + 'T12:00:00')) / 86400000); }
 function etatExpiration(d) {
@@ -1970,10 +1975,9 @@ function resumeDocs(uid) {
 }
 function ouvrirDocs(uid) {
   docsUser = uid;
-  if (!$('docType').options.length) {
-    $('docType').innerHTML = '<option value="">— Choisir —</option>' + TYPES_DOC.map(function(x) { return '<option>' + escHtml(x) + '</option>'; }).join('');
-    $('docType').onchange = function() { $('docAutreField').classList.toggle('hidden', $('docType').value !== 'Autre'); };
-  }
+  var types = uid.indexOf('camion_') === 0 ? TYPES_DOC_CAMION : TYPES_DOC;
+  $('docType').innerHTML = '<option value="">— Choisir —</option>' + types.map(function(x) { return '<option>' + escHtml(x) + '</option>'; }).join('');
+  $('docType').onchange = function() { $('docAutreField').classList.toggle('hidden', $('docType').value !== 'Autre'); };
   $('docType').value = ''; $('docAutre').value = ''; $('docExpire').value = ''; $('docAutreField').classList.add('hidden');
   $('docsBg').classList.remove('hidden');
   renderDocs();
@@ -1981,10 +1985,9 @@ function ouvrirDocs(uid) {
 function fermerDocs() { docsUser = null; $('docsBg').classList.add('hidden'); }
 function renderDocs() {
   if (!docsUser) return;
-  var u = allUsers[docsUser] || { nom: docsUser };
   var docs = Object.keys(allDocs[docsUser] || {}).map(function(k) { return Object.assign({ key: k }, allDocs[docsUser][k]); })
     .sort(function(a, b) { return a.type.localeCompare(b.type) || b.ajouteLe - a.ajouteLe; });
-  $('docsTitre').textContent = '📁 Documents — ' + u.nom;
+  $('docsTitre').textContent = '📁 Documents — ' + (docsUser.indexOf('camion_') === 0 ? docsUser.slice(7) : nomDocs(docsUser));
   $('docsCount').textContent = docs.length ? docs.length + ' document' + (docs.length > 1 ? 's' : '') : '';
   $('docsList').innerHTML = docs.length ? docs.map(function(d) {
     var e = etatExpiration(d.expire), k = "'" + escHtml(d.key) + "'";
@@ -2069,7 +2072,7 @@ function voirDoc(key) {
 function supprimerDoc(key) {
   var uid = docsUser, d = (allDocs[uid] || {})[key];
   if (!d) return;
-  confirmer('Supprimer le document « ' + d.type + ' » de ' + (allUsers[uid] || {}).nom + ' ?', { ok: 'Supprimer', danger: true }, function() {
+  confirmer('Supprimer le document « ' + d.type + ' » (' + nomDocs(uid) + ') ?', { ok: 'Supprimer', danger: true }, function() {
     var updates = {};
     updates[ROOT + '/docsChauffeurs/' + uid + '/' + key] = null;
     updates[ROOT + '/docsFichiers/' + uid + '/' + key] = null;
@@ -2101,6 +2104,7 @@ function renderCamions() {
         '<button class="btn btn-secondary btn-small" onclick="editCamion(\'' + p + '\', \'type\')">🏷️ Type</button>' +
         '<button class="btn btn-secondary btn-small" onclick="editCamion(\'' + p + '\', \'parc\')">#️⃣ N° de parc</button>' +
         '<button class="btn btn-secondary btn-small" onclick="toggleCamion(\'' + p + '\')">' + (c.actif === false ? '✅ Remettre en service' : '⏸️ Hors service') + '</button>' +
+        '<button class="btn btn-secondary btn-small" onclick="ouvrirDocs(\'camion_' + p + '\')">📁 Documents' + resumeDocs(cleDocsCamion(c.plaque)) + '</button>' +
         '<button class="btn btn-danger btn-small" onclick="deleteCamion(\'' + p + '\')">🗑️</button>' +
       '</div></div>';
   }).join('');
@@ -2137,8 +2141,13 @@ function toggleCamion(plaque) {
 }
 
 function deleteCamion(plaque) {
-  confirmer('Supprimer le camion ' + plaque + ' ?', { ok: 'Supprimer', danger: true }, function() {
-    db.ref(ROOT + '/camions/' + plaque).remove().then(function() { showToast('Camion supprimé'); });
+  var nbDocs = Object.keys(allDocs[cleDocsCamion(plaque)] || {}).length;
+  confirmer('Supprimer le camion ' + plaque + ' ?' + (nbDocs ? ' Ses ' + nbDocs + ' document' + (nbDocs > 1 ? 's' : '') + ' seront aussi supprimés.' : ''), { ok: 'Supprimer', danger: true }, function() {
+    var updates = {};
+    updates[ROOT + '/camions/' + plaque] = null;
+    updates[ROOT + '/docsChauffeurs/' + cleDocsCamion(plaque)] = null;
+    updates[ROOT + '/docsFichiers/' + cleDocsCamion(plaque)] = null;
+    db.ref().update(updates).then(function() { showToast('Camion supprimé'); });
   });
 }
 </script>
