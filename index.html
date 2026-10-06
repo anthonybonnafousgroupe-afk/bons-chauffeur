@@ -470,7 +470,7 @@
 <script>
 // ── Version ──────────────────────────────────────────────────────────────────
 // ⚠️ Changer ce numéro à chaque modification du code
-var APP_VERSION = '0.23';
+var APP_VERSION = '0.24';
 
 // ── Firebase ─────────────────────────────────────────────────────────────────
 // Même projet Firebase que Suivi Parc et Carburant, mais toutes les données
@@ -495,11 +495,12 @@ var authGestion = null;  // 2e connexion Firebase : créer l'accès d'un chauffe
 
 var db;
 // ── Rôles et droits ──────────────────────────────────────────────────────────
-// admin : panneau administrateur (onglets Chauffeurs et Camions)
+// admin : panneau administrateur complet (comptes, documents, camions, centrales)
+// journees : voir les journées et les bons de tous les chauffeurs, marquer saisie, export
 var ROLES = {
-  chauffeur: { label: 'Chauffeur',             admin: false },
-  bureau:    { label: 'Bureau / exploitation', admin: false },
-  admin:     { label: 'Administrateur',        admin: true  }
+  chauffeur: { label: 'Chauffeur',             admin: false, journees: false },
+  bureau:    { label: 'Bureau / exploitation', admin: false, journees: true  },
+  admin:     { label: 'Administrateur',        admin: true,  journees: true  }
 };
 function roleOf(u) { return ROLES[u && u.role] || ROLES.chauffeur; }
 function can(droit) { return !!(me && roleOf(me)[droit]); }
@@ -794,8 +795,10 @@ function startApp(u) {
   $('welcome').textContent = 'Bonjour ' + me.nom;
   // Administrateur : les onglets sont des tuiles sur l'accueil (plus de barre en bas)
   $('nav').classList.add('hidden');
-  $('adminTuiles').classList.toggle('hidden', !can('admin'));
-  if (can('admin')) $('bientotCard').classList.add('hidden');
+  $('adminTuiles').classList.toggle('hidden', !can('journees'));
+  // Bureau / exploitation : seulement la tuile Journées
+  Array.prototype.forEach.call(document.querySelectorAll('#adminTuiles .tuile'), function(b, i) { b.classList.toggle('hidden', i > 0 && !can('admin')); });
+  if (can('journees')) $('bientotCard').classList.add('hidden');
   // Repère public « un administrateur existe » : l'écran de création reste caché une fois la base verrouillée
   if (can('admin')) db.ref(ROOT + '/reglages/initialise').set(true).catch(function() {});
   $('cRole').innerHTML = Object.keys(ROLES).map(function(r) {
@@ -808,6 +811,7 @@ function startApp(u) {
   showScreen('app');
   showView('accueil');
   subscribeCamions();
+  if (can('journees')) subscribeJournees();
   if (can('admin')) subscribeAdmin();
 }
 
@@ -821,7 +825,7 @@ function showView(v) {
 }
 // Petits chiffres sous chaque tuile de l'accueil administrateur
 function majTuiles() {
-  if (!can('admin')) return;
+  if (!can('journees')) return;
   var aSaisir = 0, enCours = 0;
   Object.keys(toutesFins).forEach(function(jk) {
     Object.values(toutesFins[jk] || {}).forEach(function(f) { if (f.valideLe && !f.saisi) aSaisir++; });
@@ -831,6 +835,7 @@ function majTuiles() {
   });
   $('tuileJournees').textContent = aSaisir ? aSaisir + ' à saisir' : enCours ? enCours + ' en cours' : 'Tout est saisi';
   $('tuileJournees').classList.toggle('alerte', aSaisir > 0);
+  if (!can('admin')) return;
   var nbCh = Object.values(allUsers).filter(function(u) { return u.role === 'chauffeur' && u.actif !== false; }).length;
   $('tuileChauffeurs').textContent = nbCh + ' chauffeur' + (nbCh > 1 ? 's' : '') + ' actif' + (nbCh > 1 ? 's' : '');
   var cams = Object.values(allCamions), pris = cams.filter(function(c) { return affectations[c.plaque]; }).length;
@@ -896,7 +901,9 @@ function subscribeAdmin() {
   // Liste des documents des chauffeurs (les fichiers eux-mêmes sont rangés à part)
   docsRef = db.ref(ROOT + '/docsChauffeurs');
   docsRef.on('value', function(snap) { allDocs = snap.val() || {}; renderUsers(); renderDocs(); });
-  // Toutes les journées (sans les photos, rangées à part)
+}
+// Toutes les journées (sans les photos, rangées à part) : administrateur et bureau / exploitation
+function subscribeJournees() {
   tousToursRef = db.ref(ROOT + '/tours');
   tousToursRef.on('value', function(snap) { tousTours = snap.val() || {}; renderJournees(); });
   toutesFinsRef = db.ref(ROOT + '/finJournee');
@@ -950,14 +957,22 @@ function fmtJour(d) {
 function fmtNombre(v) { return String(Math.round(v * 100) / 100).replace('.', ','); }
 function refreshChauffeurFilter() {
   var sel = $('filtChauffeur'), cur = sel.value;
-  sel.innerHTML = '<option value="">Tous les chauffeurs</option>' + Object.values(allUsers)
+  // Le bureau n'a pas accès aux comptes : la liste vient des journées enregistrées
+  var liste = can('admin') ? Object.values(allUsers) : toutesJournees().reduce(function(acc, j) {
+    if (!acc.some(function(u) { return u.id === j.cid; })) acc.push({ id: j.cid, nom: j.nom, role: 'chauffeur' });
+    return acc;
+  }, []);
+  if (sel.dataset.liste === JSON.stringify(liste) && sel.options.length > 1) return;
+  sel.dataset.liste = JSON.stringify(liste);
+  sel.innerHTML = '<option value="">Tous les chauffeurs</option>' + liste
     .filter(function(u) { return u.role === 'chauffeur' || !u.role; })
     .sort(function(a, b) { return a.nom.localeCompare(b.nom); })
     .map(function(u) { return '<option value="' + escHtml(u.id) + '">' + escHtml(u.nom) + '</option>'; }).join('');
   sel.value = cur;
 }
 function renderJournees() {
-  if (!can('admin')) return;
+  if (!can('journees')) return;
+  if (!can('admin')) refreshChauffeurFilter();
   majTuiles();
   var list = filteredJournees();
   var nbASaisir = list.filter(function(j) { return j.terminee && !j.fin.saisi; }).length;
@@ -1003,7 +1018,7 @@ function carteJournee(j, admin) {
         (admin && j.terminee ? (j.fin.saisi
           ? '<button class="btn btn-secondary btn-small" onclick="setSaisi(' + k + ', false)">↩️ Remettre à saisir</button>'
           : '<button class="btn btn-ok btn-small" onclick="setSaisi(' + k + ', true)">✅ Marquer saisie</button>') : '') +
-        (admin ? '<button class="btn btn-danger btn-small" onclick="deleteJournee(' + k + ')">🗑️ Supprimer</button>' : '') +
+        (admin && can('admin') ? '<button class="btn btn-danger btn-small" onclick="deleteJournee(' + k + ')">🗑️ Supprimer</button>' : '') +
       '</div></div>';
 }
 
