@@ -195,6 +195,9 @@
   .plan-ligne .acts { display: flex; gap: 6px; }
   .plan-nav { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
   .plan-nav input { flex: 1; }
+  .km-ok { margin-top: 10px; font-size: 15px; }
+  .km-saisie { margin-top: 12px; text-align: left; }
+  .km-saisie input { font-size: 18px; }
   .plan-jour { margin-bottom: 14px; }
   .plan-jour:last-child { margin-bottom: 0; }
   .plan-jour-titre { font-weight: 800; margin-bottom: 4px; }
@@ -560,7 +563,7 @@
 <script>
 // ── Version ──────────────────────────────────────────────────────────────────
 // ⚠️ Changer ce numéro à chaque modification du code
-var APP_VERSION = '0.33';
+var APP_VERSION = '0.35';
 
 // ── Firebase ─────────────────────────────────────────────────────────────────
 // Même projet Firebase que Suivi Parc et Carburant, mais toutes les données
@@ -608,7 +611,9 @@ var mesTours = {};      // tours du chauffeur aujourd'hui : { numero: { centrale
 var allCentrales = {};  // centrales à béton : { clé: { nom, adresse, lat, lng, provisoire } }
 var usersRef = null, camionsRef = null, affectRef = null, toursRef = null, centralesRef = null, finRef = null;
 var docsRef = null, allDocs = {}, docsUser = null;  // administrateur : documents des chauffeurs
-var tousToursRef = null, toutesFinsRef = null, tousTours = {}, toutesFins = {};  // administrateur : toutes les journées
+var tousToursRef = null, toutesFinsRef = null, tousTours = {}, toutesFins = {}, tousKmRef = null, tousKm = {};  // administrateur : toutes les journées
+var mesKm = {};          // kilométrage de départ de la journée : { plaque: { km, le } }
+var kmRef = null, kmEdition = false;
 var maFin = null;        // fin de journée du chauffeur : { hasLV, lvLe, … }
 var finOuvert = false;   // écran « Fin de journée » ouvert
 
@@ -867,6 +872,7 @@ function doLogout() {
   if (toursRef) toursRef.off();
   if (centralesRef) centralesRef.off();
   if (finRef) finRef.off();
+  if (kmRef) { kmRef.off(); kmRef = null; } mesKm = {}; kmEdition = false;
   if (journeeRef) journeeRef.off();
   if (tousToursRef) tousToursRef.off();
   if (docsRef) docsRef.off();
@@ -874,7 +880,8 @@ function doLogout() {
   arreterPlanning(); fermerLignePlan();
   if (tarifsRef) { tarifsRef.off(); tarifsRef = null; } tarifs = null;
   if (toutesFinsRef) toutesFinsRef.off();
-  tousTours = {}; toutesFins = {};
+  if (tousKmRef) { tousKmRef.off(); tousKmRef = null; }
+  tousTours = {}; toutesFins = {}; tousKm = {};
   maFin = null; finOuvert = false; maJournee = '';
   histoOuvert = false; histoJournees = [];
   $('histoBtn').textContent = '📅 Voir mes journées passées'; $('histoZone').classList.add('hidden'); $('histoCard').classList.add('hidden');
@@ -984,6 +991,10 @@ function suivreJournee(cle) {
   toursRef.on('value', function(snap) { mesTours = snap.val() || {}; renderTour(); });
   finRef = db.ref(ROOT + '/finJournee/' + cle + '/' + me.id);
   finRef.on('value', function(snap) { maFin = snap.val(); renderTour(); });
+  if (kmRef) kmRef.off();
+  mesKm = {}; kmEdition = false;
+  kmRef = db.ref(ROOT + '/kilometrages/' + cle + '/' + me.id);
+  kmRef.on('value', function(snap) { mesKm = snap.val() || {}; renderCamionJour(); renderTour(); });
   renderTour();
 }
 // Clé de la journée suivante le même jour : 2026-10-02 → 2026-10-02-2 → 2026-10-02-3…
@@ -1021,14 +1032,16 @@ function rattraperIndex() {
 function subscribeJournees() {
   tousToursRef = db.ref(ROOT + '/tours');
   tousToursRef.on('value', function(snap) { tousTours = snap.val() || {}; toursCharges = true; renderJournees(); rattraperIndex(); });
+  tousKmRef = db.ref(ROOT + '/kilometrages');
+  tousKmRef.on('value', function(snap) { tousKm = snap.val() || {}; renderJournees(); });
   toutesFinsRef = db.ref(ROOT + '/finJournee');
   toutesFinsRef.on('value', function(snap) { toutesFins = snap.val() || {}; finsChargees = true; renderJournees(); rattraperIndex(); });
 }
 
 // ── Administration : journées des chauffeurs ────────────────────────────────
 // Une journée = clé AAAA-MM-JJ (ou AAAA-MM-JJ-2… si le chauffeur en a fait plusieurs le même jour) + chauffeur
-function toutesJournees(srcTours, srcFins) {
-  srcTours = srcTours || tousTours; srcFins = srcFins || toutesFins;
+function toutesJournees(srcTours, srcFins, srcKm) {
+  srcTours = srcTours || tousTours; srcFins = srcFins || toutesFins; srcKm = srcKm || tousKm;
   var res = {};
   [srcTours, srcFins].forEach(function(src) {
     Object.keys(src).forEach(function(jk) {
@@ -1042,8 +1055,9 @@ function toutesJournees(srcTours, srcFins) {
     var tours = etapes.filter(function(e) { return e.type !== 'transfert'; });
     var plaques = [];
     etapes.concat([fin]).forEach(function(e) { if (e.plaque && plaques.indexOf(e.plaque) === -1) plaques.push(e.plaque); });
-    var u = allUsers[j.cid] || {};
+    var u = allUsers[j.cid] || {}, kmJ = (srcKm[j.jk] || {})[j.cid] || {};
     return {
+      km: Object.keys(kmJ).map(function(p) { return { plaque: p, km: Number(kmJ[p] && kmJ[p].km) || 0, kmFin: Number(kmJ[p] && kmJ[p].kmFin) || 0 }; }),
       jk: j.jk, cid: j.cid, date: j.jk.slice(0, 10), rang: Number(j.jk.slice(11)) || 1, etapes: etapes, tours: tours, fin: fin, plaques: plaques,
       nom: u.nom || (etapes[0] && etapes[0].chauffeurNom) || fin.chauffeurNom || j.cid,
       m3: tours.reduce(function(s, e) { return s + (Number(e.quantite) || 0); }, 0),
@@ -1120,6 +1134,8 @@ function carteJournee(j, admin) {
         '<div>🔁 ' + j.tours.length + ' tour' + (j.tours.length > 1 ? 's' : '') + ' — <b>' + fmtNombre(j.m3) + ' m³</b>' +
           (nbX ? ' — 🔄 ' + nbX + ' transfert' + (nbX > 1 ? 's' : '') : '') + '</div>' +
         (j.eau ? '<div>💧 ' + fmtNombre(j.eau) + ' L d\'eau ajoutés</div>' : '') +
+        j.km.map(function(k) { return '<div>📏 ' + (j.km.length > 1 ? escHtml(k.plaque) + ' : ' : '') + 'départ <b>' + fmtCompteur(k.km) + ' km</b>' +
+          (k.kmFin ? ' → fin <b>' + fmtCompteur(k.kmFin) + ' km</b>' + (k.km ? ' (<b>' + fmtCompteur(k.kmFin - k.km) + ' km</b> parcourus)' : '') : '') + '</div>'; }).join('') +
         (admin && can('journees') ? (function() { var ca = caJournee(j); return '<div>💶 Chiffre d\'affaires : <b>' + fmtEuro(ca.total) + ' HT</b>' +
           (ca.manque ? ' <span style="color:var(--warn)">(' + ca.manque + ' ligne' + (ca.manque > 1 ? 's' : '') + ' sans prix)</span>' : '') + '</div>'; })() : '') +
         '<div>' + (j.terminee ? '🏁 Fin de journée validée à ' + heure(j.fin.valideLe) : '🚚 Journée en cours') +
@@ -1162,16 +1178,18 @@ function chargerHisto() {
   db.ref(ROOT + '/mesJournees/' + me.id).once('value').then(function(snap) {
     var cles = Object.keys(snap.val() || {}).filter(function(jk) { return jk !== maJournee; }).sort().reverse().slice(0, 200);
     return Promise.all(cles.map(function(jk) {
-      return Promise.all([db.ref(ROOT + '/tours/' + jk + '/' + me.id).once('value'), db.ref(ROOT + '/finJournee/' + jk + '/' + me.id).once('value')])
-        .then(function(r) { return { jk: jk, t: r[0].val(), f: r[1].val() }; });
+      return Promise.all([db.ref(ROOT + '/tours/' + jk + '/' + me.id).once('value'), db.ref(ROOT + '/finJournee/' + jk + '/' + me.id).once('value'),
+        db.ref(ROOT + '/kilometrages/' + jk + '/' + me.id).once('value')])
+        .then(function(r) { return { jk: jk, t: r[0].val(), f: r[1].val(), k: r[2].val() }; });
     }));
   }).then(function(liste) {
-    var mesT = {}, mesF = {};
+    var mesT = {}, mesF = {}, mesK = {};
     liste.forEach(function(x) {
+      if (x.k) { mesK[x.jk] = {}; mesK[x.jk][me.id] = x.k; }
       if (x.t) { mesT[x.jk] = {}; mesT[x.jk][me.id] = x.t; }
       if (x.f) { mesF[x.jk] = {}; mesF[x.jk][me.id] = x.f; }
     });
-    histoJournees = toutesJournees(mesT, mesF);
+    histoJournees = toutesJournees(mesT, mesF, mesK);
     renderHisto();
   }).catch(function(e) { $('histoList').innerHTML = '<div class="empty">Erreur : ' + escHtml(e.message) + '</div>'; });
 }
@@ -1222,11 +1240,12 @@ function celluleCsv(c) {
   return '"' + c.replace(/"/g, '""') + '"';
 }
 function exportCsv() {
-  var rows = [['Date', 'Journée', 'Chauffeur', 'Plaque', 'Étape', 'Centrale de départ', 'Client', 'Quantité (m³)', 'Adresse de livraison', 'GPS livraison', 'Zone',
+  var rows = [['Date', 'Journée', 'Chauffeur', 'Plaque', 'Km de départ', 'Km de fin', 'Km parcourus', 'Étape', 'Centrale de départ', 'Client', 'Quantité (m³)', 'Adresse de livraison', 'GPS livraison', 'Zone',
     'Distance (km)', 'Rajout d\'eau (L)', 'Bon de livraison', 'Centrale d\'arrivée (transfert)', 'Heure', 'Commentaire', 'Lettre de voiture', 'Fin de journée', 'État', 'Saisie par', 'Saisie le']];
   filteredJournees().slice().reverse().forEach(function(j) {
     var commun = function(e) {
-      return [new Date(j.date + 'T12:00:00').toLocaleDateString('fr-FR'), j.rang, j.nom, e.plaque || j.plaques.join(' ')];
+      var pl = e.plaque || j.plaques.join(' '), k = j.km.filter(function(x) { return x.plaque === pl; })[0] || (j.km.length === 1 ? j.km[0] : null);
+      return [new Date(j.date + 'T12:00:00').toLocaleDateString('fr-FR'), j.rang, j.nom, pl, k ? k.km : '', k && k.kmFin ? k.kmFin : '', k && k.kmFin && k.km ? k.kmFin - k.km : ''];
     };
     var fin = [j.fin.hasLV ? 'Envoyée' : 'Non envoyée', j.terminee ? heure(j.fin.valideLe) : 'En cours',
       !j.terminee ? 'En cours' : j.fin.saisi ? 'Saisie' : 'À saisir', j.fin.saisiPar || '', j.fin.saisiLe ? new Date(j.fin.saisiLe).toLocaleDateString('fr-FR') : ''];
@@ -1269,7 +1288,7 @@ function renderCamionJour() {
     $('camionCardTitle').textContent = '🚛 Mon camion du jour';
     $('camionPris').innerHTML = '<span class="plaque">' + escHtml(p) + '</span>' +
       (descCamion(c) ? '<div class="item-sub"><b>' + escHtml(descCamion(c)) + '</b></div>' : '') +
-      '<div class="item-sub">Pris à ' + heure(affectations[p].ts) + '</div>' +
+      '<div class="item-sub">Pris à ' + heure(affectations[p].ts) + '</div>' + blocKm(p) +
       '<div class="input-row" style="justify-content:center;flex-wrap:wrap">' +
         '<button class="btn btn-secondary" onclick="changerCamion()">🔄 Changer de camion</button>' +
         '<button class="btn btn-secondary" onclick="ouvrirDocsCamionChauffeur(\'' + jsq(p) + '\')">📁 Documents du camion</button></div>';
@@ -1289,6 +1308,28 @@ function renderCamionJour() {
     : 'Aucun camion disponible pour le moment — contactez le bureau';
 }
 
+// Kilométrage de départ : obligatoire avant le 1er tour avec ce camion
+function fmtCompteur(km) { return String(Math.round(Number(km) || 0)).replace(/\B(?=(\d{3})+(?!\d))/g, ' '); }
+function kmManquant() { var p = monCamion(); return !!p && !(mesKm[p] && mesKm[p].km); }
+function blocKm(p) {
+  var k = mesKm[p];
+  if (k && k.km && !kmEdition) return '<div class="km-ok">📏 Km de départ : <b>' + fmtCompteur(k.km) + ' km</b> ' +
+    '<button class="btn btn-secondary btn-small" onclick="kmEdition = true; renderCamionJour(); renderTour()">✏️ Corriger</button></div>';
+  return '<div class="km-saisie"><div class="field"><label>📏 Kilométrage de départ du camion (obligatoire)</label>' +
+    '<input id="kmDepart" type="text" inputmode="numeric" placeholder="ex : 245 380" value="' + (k && k.km ? escHtml(String(k.km)) : '') + '">' +
+    '<div class="hint">Relevez le compteur avant de partir</div></div>' +
+    '<button class="btn btn-primary" id="kmBtn" onclick="enregistrerKm()">✅ Valider le kilométrage</button></div>';
+}
+function enregistrerKm() {
+  var p = monCamion(), brut = ($('kmDepart').value || '').replace(/[\s.]/g, ''), km = Number(brut);
+  if (!p) return;
+  if (!/^\d+$/.test(brut) || km <= 0 || km > 9999999) { showToast('Indiquez le kilométrage du compteur (chiffres uniquement)'); $('kmDepart').focus(); return; }
+  $('kmBtn').disabled = true;
+  db.ref(ROOT + '/mesJournees/' + me.id + '/' + maJournee).set(true).catch(function() {});
+  db.ref(ROOT + '/kilometrages/' + maJournee + '/' + me.id + '/' + p).set({ km: km, le: Date.now() }).then(function() {
+    kmEdition = false; showToast('✅ Kilométrage enregistré', true); renderCamionJour(); renderTour();
+  }).catch(function(e) { showToast('Erreur : ' + e.message); $('kmBtn').disabled = false; });
+}
 function prendreCamion() {
   var p = $('choixCamion').value;
   if (!p) { showToast('Choisissez un camion dans la liste'); $('choixCamion').focus(); return; }
@@ -1532,6 +1573,10 @@ function centraleActuelle() {
 function renderTour() {
   if (!me || me.role !== 'chauffeur') return;
   var camion = monCamion();
+  if (camion && kmManquant()) {
+    ['tourCard', 'suiteCard', 'finCard'].forEach(function(id) { $(id).classList.add('hidden'); });
+    return;
+  }
   $('tourCard').classList.toggle('hidden', !camion);
   var etapes = camion ? etapesTriees() : [], f = etapeForm;
   // Une fois une étape enregistrée, les deux boutons remplacent « écrans à venir »
@@ -1782,6 +1827,9 @@ function renderFin(etapes) {
     $('finContenu').innerHTML = resume + '<div class="bl-ok">✅ Lettre de voiture envoyée à ' + heure(maFin.lvLe) +
       '<div class="item-actions"><button class="btn btn-secondary btn-small" onclick="voirLV()">👁️ Voir</button>' +
       '<button class="btn btn-secondary btn-small" onclick="choisirBL(\'lv\')">🔄 Remplacer la photo</button></div></div>' +
+      '<div class="field km-saisie"><label>📏 Kilométrage de fin du camion (obligatoire)</label>' +
+        '<input id="kmFin" type="text" inputmode="numeric" placeholder="ex : 245 520" value="' + escHtml(kmFinSaisi) + '" oninput="kmFinSaisi = this.value">' +
+        '<div class="hint">' + (kmDepartActuel() ? 'Km de départ : ' + fmtCompteur(kmDepartActuel()) + ' km — ' : '') + 'relevez le compteur en fin de journée</div></div>' +
       '<button class="btn btn-fin" id="finValBtn" style="width:100%;margin-top:12px;font-size:17px;padding:16px" onclick="validerFinJournee()">🏁 Valider la fin de journée</button>';
   } else {
     $('finContenu').innerHTML = resume +
@@ -1804,18 +1852,26 @@ function envoyerLV(data) {
     .catch(function(e) { showToast('Échec de l\'envoi : ' + e.message); renderTour(); });
 }
 // Clôture : le camion est rendu, la journée est archivée et le chauffeur revient au choix du camion
+var kmFinSaisi = '';
+function kmDepartActuel() { var p = monCamion(); return p && mesKm[p] ? Number(mesKm[p].km) || 0 : 0; }
 function validerFinJournee() {
-  confirmer('Valider la fin de journée ? Le camion ' + monCamion() + ' sera rendu et vous reviendrez au menu principal.', { ok: 'Valider' }, function() {
+  var brut = ($('kmFin') ? $('kmFin').value : '').replace(/[\s.]/g, ''), kmFin = Number(brut), dep = kmDepartActuel();
+  if (!/^\d+$/.test(brut) || kmFin <= 0 || kmFin > 9999999) { showToast('Indiquez le kilométrage de fin du compteur (chiffres uniquement)'); if ($('kmFin')) $('kmFin').focus(); return; }
+  if (dep && kmFin < dep) { showToast('Le kilométrage de fin (' + fmtCompteur(kmFin) + ') est plus petit que celui du départ (' + fmtCompteur(dep) + ')'); $('kmFin').focus(); return; }
+  confirmer('Valider la fin de journée avec ' + fmtCompteur(kmFin) + ' km au compteur ? Le camion ' + monCamion() + ' sera rendu et vous reviendrez au menu principal.', { ok: 'Valider' }, function() {
     var p = monCamion(), updates = {}, now = Date.now(), btn = $('finValBtn');
     if (btn) btn.disabled = true;
     updates[ROOT + '/finJournee/' + maJournee + '/' + me.id + '/valideLe'] = now;
     if (p) {
+      updates[ROOT + '/kilometrages/' + maJournee + '/' + me.id + '/' + p + '/kmFin'] = kmFin;
+      updates[ROOT + '/kilometrages/' + maJournee + '/' + me.id + '/' + p + '/kmFinLe'] = now;
       updates[ROOT + '/historiqueCamions/' + jourAffect + '/' + db.ref(ROOT + '/historiqueCamions').push().key] =
         Object.assign({}, affectations[p], { journee: maJournee, renduLe: now });
       updates[ROOT + '/affectations/' + jourAffect + '/' + p] = null;
     }
     updates[ROOT + '/journeeEnCours/' + me.id] = { cle: journeeSuivante(), date: jourAffect };
     db.ref().update(updates).then(function() {
+      kmFinSaisi = '';
       showToast('✅ Journée terminée — vous pouvez démarrer une nouvelle journée', true);
       setTimeout(chargerHisto, 300);
       window.scrollTo(0, 0);
