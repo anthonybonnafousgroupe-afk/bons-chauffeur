@@ -198,6 +198,20 @@
   .plan-jour { margin-bottom: 14px; }
   .plan-jour:last-child { margin-bottom: 0; }
   .plan-jour-titre { font-weight: 800; margin-bottom: 4px; }
+  .fact-ligne { display: flex; justify-content: space-between; gap: 10px; padding: 7px 0; border-top: 1px solid var(--border); font-size: 13px; }
+  .fact-ligne .mt { font-weight: 700; white-space: nowrap; }
+  .fact-jour { margin-top: 10px; }
+  .fact-jour-titre { display: flex; justify-content: space-between; font-weight: 700; font-size: 14px; padding: 6px 0 2px; }
+  .fact-total { font-size: 18px; font-weight: 800; color: var(--red); }
+  .tarif-grille { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 12px; }
+  .tarif-grille .field { margin-bottom: 0; }
+  .km-table { width: 100%; border-collapse: collapse; font-size: 11px; margin-top: 8px; }
+  .km-table th, .km-table td { border: 1px solid var(--border); padding: 3px; text-align: center; }
+  #tarifsPli > summary { list-style: none; display: flex; align-items: center; gap: 8px; }
+  #tarifsPli > summary::-webkit-details-marker { display: none; }
+  #tarifsPli > summary::after { content: '▼'; margin-left: auto; font-size: 12px; transition: transform .2s; }
+  #tarifsPli[open] > summary::after { transform: rotate(180deg); }
+  .km-table td.zero { color: var(--ok); font-weight: 700; }
   .tag.envoye { background: #e8f1fb; color: #1f5fa8; }
   .tag.modifie { background: #fff4e0; color: var(--warn); }
   .docs-panel { max-width: 520px; max-height: calc(100vh - 32px); overflow-y: auto; }
@@ -270,6 +284,7 @@
       <div class="tuiles hidden" id="adminTuiles">
         <button class="tuile" onclick="showView('journees')"><span class="ic">📋</span><span class="nom">Journées</span><span class="info" id="tuileJournees"></span></button>
         <button class="tuile" onclick="showView('planning')"><span class="ic">🗓️</span><span class="nom">Planning</span><span class="info" id="tuilePlanning"></span></button>
+        <button class="tuile" onclick="showView('facturation')"><span class="ic">💶</span><span class="nom">Facturation</span><span class="info" id="tuileFacturation"></span></button>
         <button class="tuile" data-admin="1" onclick="showView('chauffeurs')"><span class="ic">👥</span><span class="nom">Chauffeurs</span><span class="info" id="tuileChauffeurs"></span></button>
         <button class="tuile" data-admin="1" onclick="showView('camions')"><span class="ic">🚛</span><span class="nom">Camions</span><span class="info" id="tuileCamions"></span></button>
         <button class="tuile" data-admin="1" onclick="showView('centrales')"><span class="ic">🏭</span><span class="nom">Centrales</span><span class="info" id="tuileCentrales"></span></button>
@@ -419,6 +434,33 @@
       <div id="planningList"></div>
     </section>
 
+    <!-- Administration / bureau : facturation MBM (zones de livraison + transferts au km) -->
+    <section class="view" id="view-facturation">
+      <button class="btn btn-secondary btn-small retour" onclick="showView('accueil')">← Accueil</button>
+      <h2>Facturation MBM</h2>
+      <div class="filters">
+        <div class="field"><select id="factPeriode" onchange="changerPeriode()"><option value="jour">Par jour</option><option value="mois" selected>Par mois</option><option value="annee">Par année</option></select></div>
+        <div class="field"><input id="factJour" type="date" class="hidden" onchange="renderFacturation()"><input id="factMois" type="month" onchange="renderFacturation()">
+          <select id="factAnnee" class="hidden" onchange="renderFacturation()"></select></div>
+        <div class="field"><select id="factPlaque" onchange="renderFacturation()"><option value="">Tous les camions</option></select></div>
+      </div>
+      <div class="summary export">
+        <span id="factCount"></span>
+        <button class="btn btn-secondary btn-small" id="factExportBtn" onclick="exportFacturation()">⬇️ Export Excel (CSV)</button>
+      </div>
+      <div class="card hidden" style="max-width:none;margin-bottom:12px" id="factTotalCard"></div>
+      <div id="factList"></div>
+      <div class="card hidden" style="max-width:none;margin-top:16px" id="tarifsCard">
+        <details id="tarifsPli"><summary class="card-title" style="cursor:pointer;margin-bottom:0">⚙️ Tarifs (administrateur)</summary>
+        <div class="tarif-grille" id="tarifsZones" style="margin-top:12px"></div>
+        <div class="field" style="margin-top:8px"><label>Transfert entre centrales (€ / km)</label><input id="tarifKm" type="text" inputmode="decimal"></div>
+        <button class="btn btn-primary" onclick="enregistrerTarifs()">💾 Enregistrer les tarifs</button>
+        <details style="margin-top:12px"><summary>Distances entre centrales (km)</summary><div id="kmTable" style="overflow-x:auto"></div>
+          <div class="item-sub">0 km = transfert non facturé (Millau ↔ Saint-Affrique, Salles-Curan ↔ Réquista)</div></details>
+        </details>
+      </div>
+    </section>
+
     <!-- Administration : camions -->
     <section class="view" id="view-camions">
       <button class="btn btn-secondary btn-small retour" onclick="showView('accueil')">← Accueil</button>
@@ -518,7 +560,7 @@
 <script>
 // ── Version ──────────────────────────────────────────────────────────────────
 // ⚠️ Changer ce numéro à chaque modification du code
-var APP_VERSION = '0.28';
+var APP_VERSION = '0.32';
 
 // ── Firebase ─────────────────────────────────────────────────────────────────
 // Même projet Firebase que Suivi Parc et Carburant, mais toutes les données
@@ -825,6 +867,7 @@ function doLogout() {
   if (docsRef) docsRef.off();
   allDocs = {}; fermerDocs();
   arreterPlanning(); fermerLignePlan();
+  if (tarifsRef) { tarifsRef.off(); tarifsRef = null; } tarifs = null;
   if (toutesFinsRef) toutesFinsRef.off();
   tousTours = {}; toutesFins = {};
   maFin = null; finOuvert = false; maJournee = '';
@@ -860,14 +903,15 @@ function startApp(u) {
   showScreen('app');
   showView('accueil');
   subscribeCamions();
-  if (can('journees')) { subscribeJournees(); subscribePlanning(); }
+  if (can('journees')) { subscribeJournees(); subscribePlanning(); subscribeTarifs(); }
   if (can('admin')) subscribeAdmin();
   if (me.role === 'chauffeur') suivreMonPlanning();
 }
 
 // ── Navigation ───────────────────────────────────────────────────────────────
 function showView(v) {
-  ['accueil', 'journees', 'planning', 'chauffeurs', 'camions', 'centrales'].forEach(function(n) {
+  if (v === 'facturation') renderFacturation();
+  ['accueil', 'journees', 'planning', 'facturation', 'chauffeurs', 'camions', 'centrales'].forEach(function(n) {
     $('view-' + n).classList.toggle('active', n === v);
     if ($('nav-' + n)) $('nav-' + n).classList.toggle('active', n === v);
   });
@@ -1023,17 +1067,25 @@ function refreshChauffeurFilter() {
 }
 function renderJournees() {
   if (!can('journees')) return;
+  if ($('view-facturation').classList.contains('active')) renderFacturation();
   if (!can('admin')) refreshChauffeurFilter();
   majTuiles();
   var list = filteredJournees();
   var nbASaisir = list.filter(function(j) { return j.terminee && !j.fin.saisi; }).length;
   var nbEnCours = list.filter(function(j) { return !j.terminee; }).length;
+  var caTotal = list.reduce(function(s, j) { return s + caJournee(j).total; }, 0);
   $('journeesCount').textContent = list.length + ' journée' + (list.length > 1 ? 's' : '') + ' — ' + nbASaisir + ' à saisir' +
-    (nbEnCours ? ' — ' + nbEnCours + ' en cours' : '');
+    (nbEnCours ? ' — ' + nbEnCours + ' en cours' : '') + ' — CA ' + fmtEuro(arrondi2(caTotal)) + ' HT';
   $('exportBtn').disabled = !list.length;
   if (!list.length) { $('journeesList').innerHTML = '<div class="empty">Aucune journée enregistrée</div>'; return; }
   $('journeesList').innerHTML = list.slice(0, 300).map(function(j) { return carteJournee(j, true); }).join('') +
     (list.length > 300 ? '<div class="empty">300 premières affichées — affinez les filtres</div>' : '');
+}
+// Prix d'une étape, affiché seulement au bureau et à l'administrateur
+function prixEtape(e, admin) {
+  if (!admin || !can('journees')) return '';
+  var m = montantEtape(e);
+  return ' — <b style="color:var(--red)">' + (m.montant == null ? '⚠️ prix ?' : fmtEuro(m.montant)) + '</b>' + (e.type === 'transfert' ? ' <span class="item-sub">(' + escHtml(m.base) + ')</span>' : '');
 }
 // Fiche d'une journée : vue administrateur (saisie, suppression) ou vue chauffeur (historique, consultation seule)
 function carteJournee(j, admin) {
@@ -1048,6 +1100,8 @@ function carteJournee(j, admin) {
         '<div>🔁 ' + j.tours.length + ' tour' + (j.tours.length > 1 ? 's' : '') + ' — <b>' + fmtNombre(j.m3) + ' m³</b>' +
           (nbX ? ' — 🔄 ' + nbX + ' transfert' + (nbX > 1 ? 's' : '') : '') + '</div>' +
         (j.eau ? '<div>💧 ' + fmtNombre(j.eau) + ' L d\'eau ajoutés</div>' : '') +
+        (admin && can('journees') ? (function() { var ca = caJournee(j); return '<div>💶 Chiffre d\'affaires : <b>' + fmtEuro(ca.total) + ' HT</b>' +
+          (ca.manque ? ' <span style="color:var(--warn)">(' + ca.manque + ' ligne' + (ca.manque > 1 ? 's' : '') + ' sans prix)</span>' : '') + '</div>'; })() : '') +
         '<div>' + (j.terminee ? '🏁 Fin de journée validée à ' + heure(j.fin.valideLe) : '🚚 Journée en cours') +
           (j.fin.hasLV ? '' : ' — lettre de voiture pas encore envoyée') + '</div>' +
         (admin && j.fin.saisi ? '<div class="saisi-info">✅ Saisie par ' + escHtml(j.fin.saisiPar || '?') + (j.fin.saisiLe ? ' le ' + new Date(j.fin.saisiLe).toLocaleDateString('fr-FR') : '') + '</div>' : '') +
@@ -1055,12 +1109,12 @@ function carteJournee(j, admin) {
       (j.etapes.length ? '<details class="etapes"><summary>Détail des tours</summary>' + j.etapes.map(function(e) {
         var comm = e.commentaire ? '<div class="item-sub">💬 <i>' + escHtml(e.commentaire) + '</i></div>' : '';
         if (e.type === 'transfert') return '<div class="etape">🔄 <b>Transfert</b> ' + escHtml(e.depart) + ' → ' + escHtml(e.arrivee) +
-          ' <span class="item-sub">(' + heure(e.enregistreLe) + ')</span>' + comm + '</div>';
+          ' <span class="item-sub">(' + heure(e.enregistreLe) + ')</span>' + prixEtape(e, admin) + comm + '</div>';
         return '<div class="etape"><b>' + ordinal(e.numero || 1) + ' tour</b> — ' + escHtml(e.centrale) + ' → <b>' + escHtml(e.client) + '</b> — ' + escHtml(fmtQte(e.quantite)) +
           '<div class="item-sub">' + escHtml(e.adresse) + ' ' + lienCarte(e) + '</div>' +
           '<div class="item-sub">' + texteGps(e) + '</div>' +
           '<div class="item-sub">' + escHtml(e.zone || '') + (e.distanceKm != null ? ' (' + fmtKm(e.distanceKm) + ')' : '') +
-          ' — ' + (e.eauAjout ? '💧 ' + fmtNombre(e.eauLitres) + ' L' : 'sans eau') + ' — ' + heure(e.enregistreLe) + '</div>' + comm +
+          ' — ' + (e.eauAjout ? '💧 ' + fmtNombre(e.eauLitres) + ' L' : 'sans eau') + ' — ' + heure(e.enregistreLe) + prixEtape(e, admin) + '</div>' + comm +
           (e.hasBL ? '<button class="btn btn-secondary btn-small" onclick="voirPhoto(\'/bl/' + escHtml(j.jk) + '/' + escHtml(j.cid) + '/' + e.n + '\')">🧾 Bon de livraison</button>'
                    : '<div class="item-sub" style="color:var(--warn)">Bon de livraison pas encore envoyé</div>') + '</div>';
       }).join('') + '</details>' : '') +
@@ -2353,6 +2407,172 @@ function planningVu(d) {
   db.ref(ROOT + '/planningEnvoi/' + d + '/' + me.id + '/luLe').set(Date.now())
     .then(function() { showToast('✅ Merci, le bureau sait que vous l\'avez vue', true); })
     .catch(function(e) { showToast('Erreur : ' + e.message); });
+}
+
+// ── Facturation MBM : visible uniquement par l'administrateur et le bureau ──
+// Chaque livraison est facturée selon sa zone ; chaque transfert entre centrales au km (tableau des distances).
+// Les centrales appartiennent toutes à MBM : la facture va à MBM, regroupée par centrale de départ.
+// Les prix ne sont jamais écrits dans le code (lisible par tous sur GitHub) : seulement dans la base, réservés au bureau et à l'admin
+// Distances (km) du récapitulatif « Malaxeur » ; 0 = transfert non facturé
+var CENTRALES_KM = ['Millau', 'Saint-Affrique', 'Salles-Curan', 'Réquista', 'Sévérac-le-Château', 'Rodez', 'Villefranche-de-Rouergue', 'Mende'];
+var DISTANCES_KM = {
+  'Millau':         { 'Saint-Affrique': 0, 'Salles-Curan': 38, 'Réquista': 66, 'Sévérac-le-Château': 38, 'Rodez': 67, 'Villefranche-de-Rouergue': 120, 'Mende': 97 },
+  'Saint-Affrique': { 'Salles-Curan': 42, 'Réquista': 40, 'Sévérac-le-Château': 67, 'Rodez': 80, 'Villefranche-de-Rouergue': 117, 'Mende': 121 },
+  'Salles-Curan':   { 'Réquista': 0, 'Sévérac-le-Château': 56, 'Rodez': 38, 'Villefranche-de-Rouergue': 89, 'Mende': 108 },
+  'Réquista':       { 'Sévérac-le-Château': 83, 'Rodez': 53, 'Villefranche-de-Rouergue': 74, 'Mende': 139 },
+  'Sévérac-le-Château': { 'Rodez': 45, 'Villefranche-de-Rouergue': 110, 'Mende': 61 },
+  'Rodez':          { 'Villefranche-de-Rouergue': 66, 'Mende': 108 },
+  'Villefranche-de-Rouergue': { 'Mende': 168 }
+};
+var tarifs = null, tarifsRef = null;
+function subscribeTarifs() {
+  tarifsRef = db.ref(ROOT + '/tarifs');
+  tarifsRef.on('value', function(snap) { tarifs = snap.val(); renderFacturation(); renderJournees(); }, function() { tarifs = null; });
+}
+function tarifsActuels() {
+  var t = tarifs || {};
+  return { zones: t.zones || {}, prixKm: t.prixKm != null ? t.prixKm : null, saisis: !!t.zones };
+}
+// « Salles Curan », « ST AFFRIQUE », « Severac »… → nom du tableau des distances
+function nomCentraleKm(nom) {
+  var n = String(nom || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z]/g, '').replace(/^st(?!e)/, 'saint');
+  var cles = { millau: 'Millau', saintaffrique: 'Saint-Affrique', salle: 'Salles-Curan', requista: 'Réquista', severac: 'Sévérac-le-Château', rodez: 'Rodez', villefranche: 'Villefranche-de-Rouergue', mende: 'Mende' };
+  for (var k in cles) if (n.indexOf(k) === 0) return cles[k];
+  return null;
+}
+function distanceKm(a, b) {
+  var x = nomCentraleKm(a), y = nomCentraleKm(b);
+  if (!x || !y || x === y) return null;
+  var d = (DISTANCES_KM[x] || {})[y];
+  return d != null ? d : (DISTANCES_KM[y] || {})[x] != null ? DISTANCES_KM[y][x] : null;
+}
+function arrondi2(v) { return Math.round(v * 100) / 100; }
+function fmtEuro(v) { return v == null ? '—' : v.toLocaleString('fr-FR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' €'; }
+// Montant d'une étape : livraison = prix de sa zone, transfert = km × prix au km (null = à vérifier)
+function montantEtape(e) {
+  var tf = tarifsActuels();
+  if (e.type === 'transfert') {
+    var km = distanceKm(e.depart, e.arrivee);
+    return { base: km == null ? 'distance inconnue' : km + ' km', montant: km == null ? null : km === 0 ? 0 : tf.prixKm == null ? null : arrondi2(km * tf.prixKm) };
+  }
+  var prix = tf.zones[e.zone];
+  return { base: e.zone || 'zone manquante', montant: prix == null ? null : prix };
+}
+// Chiffre d'affaires d'une journée (onglet Journées)
+function caJournee(j) {
+  var total = 0, manque = 0;
+  j.etapes.forEach(function(e) { var m = montantEtape(e).montant; if (m == null) manque++; else total += m; });
+  return { total: arrondi2(total), manque: manque };
+}
+// Une ligne par livraison ou transfert du mois, avec son montant (null = à vérifier)
+// Période choisie : un jour (AAAA-MM-JJ), un mois (AAAA-MM) ou une année (AAAA)
+function periodeFacturation() {
+  var p = $('factPeriode').value;
+  return p === 'jour' ? $('factJour').value : p === 'annee' ? $('factAnnee').value : $('factMois').value;
+}
+function libellePeriode() { return { jour: 'du jour', mois: 'du mois', annee: 'de l\'année' }[$('factPeriode').value]; }
+function changerPeriode() {
+  var p = $('factPeriode').value;
+  $('factJour').classList.toggle('hidden', p !== 'jour');
+  $('factMois').classList.toggle('hidden', p !== 'mois');
+  $('factAnnee').classList.toggle('hidden', p !== 'annee');
+  renderFacturation();
+}
+function lignesFacturation() {
+  var per = periodeFacturation(), res = [];
+  toutesJournees().forEach(function(j) {
+    if (per && j.date.slice(0, per.length) !== per) return;
+    j.etapes.forEach(function(e) {
+      var m = montantEtape(e), tr = e.type === 'transfert';
+      res.push({ date: j.date, nom: j.nom, plaque: e.plaque || j.plaques[0] || '', type: tr ? 'Transfert' : 'Livraison', centrale: (tr ? e.depart : e.centrale) || '',
+        detail: tr ? (e.depart || '?') + ' → ' + (e.arrivee || '?') : (e.centrale ? e.centrale + ' → ' : '') + (e.client || '') + (e.quantite ? ' — ' + fmtQte(e.quantite) : ''),
+        base: m.base, montant: m.montant, heure: e.enregistreLe });
+    });
+  });
+  var p = $('factPlaque').value;
+  return res.filter(function(l) { return !p || l.plaque === p; })
+    .sort(function(a, b) { return a.date.localeCompare(b.date) || (a.heure || 0) - (b.heure || 0); });
+}
+function renderFacturation() {
+  if (!can('journees') || !$('factMois') || !$('factPeriode')) return;
+  if (!$('factMois').value) $('factMois').value = todayStr().slice(0, 7);
+  if (!$('factJour').value) $('factJour').value = todayStr();
+  var annees = {}, ac = $('factAnnee').value || todayStr().slice(0, 4);
+  annees[todayStr().slice(0, 4)] = 1;
+  toutesJournees().forEach(function(j) { annees[j.date.slice(0, 4)] = 1; });
+  $('factAnnee').innerHTML = Object.keys(annees).sort().reverse().map(function(a) { return '<option>' + a + '</option>'; }).join('');
+  $('factAnnee').value = ac;
+  var plaques = {};
+  toutesJournees().forEach(function(j) { j.etapes.forEach(function(e) { var p = e.plaque || j.plaques[0]; if (p) plaques[p] = 1; }); });
+  var sel = $('factPlaque'), cur = sel.value;
+  sel.innerHTML = '<option value="">Tous les camions</option>' + Object.keys(plaques).sort().map(function(p) { return '<option>' + escHtml(p) + '</option>'; }).join('');
+  sel.value = cur;
+  var lignes = lignesFacturation(), total = 0, aVerif = 0, parP = {};
+  lignes.forEach(function(l) {
+    if (l.montant == null) aVerif++; else total += l.montant;
+    var g = parP[l.plaque] = parP[l.plaque] || { jours: {}, total: 0, liv: 0, tr: 0 };
+    var d = g.jours[l.date] = g.jours[l.date] || { lignes: [], total: 0 };
+    d.lignes.push(l); d.total += l.montant || 0; g.total += l.montant || 0;
+    if (l.type === 'Transfert') g.tr++; else g.liv++;
+  });
+  var nbLiv = lignes.filter(function(l) { return l.type === 'Livraison'; }).length, nbTr = lignes.length - nbLiv;
+  $('factCount').textContent = nbLiv + ' livraison' + (nbLiv > 1 ? 's' : '') + ' — ' + nbTr + ' transfert' + (nbTr > 1 ? 's' : '');
+  $('factExportBtn').disabled = !lignes.length;
+  $('factTotalCard').classList.toggle('hidden', !lignes.length);
+  $('factTotalCard').innerHTML = (!tarifsActuels().saisis ? '<div class="item-sub" style="color:var(--warn);margin-bottom:6px">⚠️ Tarifs pas encore saisis' + (can('admin') ? ' : remplissez « Tarifs » en bas de page' : ' : demandez à l\'administrateur') + '</div>' : '') +
+    '<div class="item-sub">Total HT ' + libellePeriode() + ($('factPlaque').value ? ' — ' + escHtml($('factPlaque').value) : '') + '</div>' +
+    '<div class="fact-total">' + fmtEuro(arrondi2(total)) + '</div>' +
+    (aVerif ? '<div class="item-sub" style="color:var(--warn)">⚠️ ' + aVerif + ' ligne' + (aVerif > 1 ? 's' : '') + ' sans prix (zone ou tarif manquant, distance inconnue), non comptée' + (aVerif > 1 ? 's' : '') + '</div>' : '');
+  $('factList').innerHTML = lignes.length ? Object.keys(parP).sort().map(function(p) {
+    var g = parP[p], jours = Object.keys(g.jours).sort();
+    return '<div class="item"><div class="item-head"><span class="plaque" style="font-size:13px">' + escHtml(p || 'Sans camion') + '</span><span style="font-weight:800;white-space:nowrap">' + fmtEuro(arrondi2(g.total)) + '</span></div>' +
+      '<div class="item-sub">' + jours.length + ' jour' + (jours.length > 1 ? 's' : '') + ' — ' + g.liv + ' livraison' + (g.liv > 1 ? 's' : '') + (g.tr ? ' — ' + g.tr + ' transfert' + (g.tr > 1 ? 's' : '') : '') + '</div>' +
+      '<details class="etapes"><summary>Détail par jour</summary>' + jours.map(function(d) {
+        var jd = g.jours[d];
+        return '<div class="fact-jour"><div class="fact-jour-titre"><span>' + fmtJour(d) + '</span><span>' + fmtEuro(arrondi2(jd.total)) + '</span></div>' +
+          jd.lignes.map(function(l) {
+            return '<div class="fact-ligne"><div>' + (l.type === 'Transfert' ? '🔄 ' : '') + escHtml(l.detail) + '<div class="item-sub">' + escHtml(l.nom) + ' — ' + escHtml(l.base) + '</div></div>' +
+              '<span class="mt"' + (l.montant == null ? ' style="color:var(--warn)"' : '') + '>' + (l.montant == null ? '⚠️ à vérifier' : fmtEuro(l.montant)) + '</span></div>';
+          }).join('') + '</div>';
+      }).join('') + '</details></div>';
+  }).join('') : '<div class="empty">Aucune livraison sur cette période</div>';
+  renderTarifs();
+}
+function renderTarifs() {
+  $('tarifsCard').classList.toggle('hidden', !can('admin'));
+  if (!can('admin') || (document.activeElement && $('tarifsCard').contains(document.activeElement))) return;
+  var tf = tarifsActuels();
+  $('tarifsZones').innerHTML = ZONES.map(function(z, i) {
+    return '<div class="field"><label>' + z + ' (€)</label><input id="tarifZ' + i + '" type="text" inputmode="decimal" value="' + (tf.zones[z] != null ? String(tf.zones[z]).replace('.', ',') : '') + '"></div>';
+  }).join('');
+  $('tarifKm').value = tf.prixKm != null ? String(tf.prixKm).replace('.', ',') : '';
+  $('kmTable').innerHTML = '<table class="km-table"><tr><th></th>' + CENTRALES_KM.map(function(c) { return '<th>' + escHtml(c.split('-')[0].slice(0, 6)) + '</th>'; }).join('') + '</tr>' +
+    CENTRALES_KM.map(function(a) {
+      return '<tr><th>' + escHtml(a.split('-')[0]) + '</th>' + CENTRALES_KM.map(function(b) {
+        var d = a === b ? null : distanceKm(a, b);
+        return '<td' + (d === 0 ? ' class="zero"' : '') + '>' + (d == null ? '' : d) + '</td>';
+      }).join('') + '</tr>';
+    }).join('') + '</table>';
+}
+function enregistrerTarifs() {
+  if (!can('admin')) return;
+  var zones = {}, ok = true;
+  ZONES.forEach(function(z, i) { var s = $('tarifZ' + i).value.trim(), v = Number(s.replace(',', '.')); if (!s || !(v >= 0)) ok = false; zones[z] = v; });
+  var sk = $('tarifKm').value.trim(), km = Number(sk.replace(',', '.'));
+  if (!ok || !sk || !(km >= 0)) { showToast('Tarif invalide : nombres uniquement'); return; }
+  db.ref(ROOT + '/tarifs').set({ zones: zones, prixKm: km, modifieLe: Date.now(), modifiePar: me.nom })
+    .then(function() { showToast('✅ Tarifs enregistrés', true); }).catch(function(e) { showToast('Erreur : ' + e.message); });
+}
+function exportFacturation() {
+  var rows = [['Plaque', 'Date', 'Type', 'Détail', 'Zone / distance', 'Chauffeur', 'Centrale de départ', 'Montant HT (€)']];
+  lignesFacturation().sort(function(a, b) { return a.plaque.localeCompare(b.plaque) || a.date.localeCompare(b.date) || (a.heure || 0) - (b.heure || 0); }).forEach(function(l) {
+    rows.push([l.plaque, new Date(l.date + 'T12:00:00').toLocaleDateString('fr-FR'), l.type, l.detail, l.base, l.nom, l.centrale, l.montant == null ? 'à vérifier' : fmtNombre(l.montant)]);
+  });
+  var csv = '\ufeff' + rows.map(function(r) { return r.map(function(c) { return '"' + String(c).replace(/"/g, '""') + '"'; }).join(';'); }).join('\r\n');
+  var a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
+  a.download = 'facturation-MBM_' + (periodeFacturation() || 'tout') + '.csv';
+  document.body.appendChild(a); a.click(); a.remove();
 }
 
 // ── Camions ──────────────────────────────────────────────────────────────────
