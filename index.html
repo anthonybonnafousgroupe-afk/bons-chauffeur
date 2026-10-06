@@ -518,7 +518,7 @@
 <script>
 // ── Version ──────────────────────────────────────────────────────────────────
 // ⚠️ Changer ce numéro à chaque modification du code
-var APP_VERSION = '0.27';
+var APP_VERSION = '0.28';
 
 // ── Firebase ─────────────────────────────────────────────────────────────────
 // Même projet Firebase que Suivi Parc et Carburant, mais toutes les données
@@ -2156,7 +2156,9 @@ function supprimerDoc(key) {
 // planningEnvoi/{date}/{chauffeur} = { envoyeLe, envoyePar, modifieLe, luLe } : le chauffeur ne voit son planning qu'une fois envoyé
 // annuaire/{id} = { nom, role, actif } : liste des chauffeurs lisible par le bureau (tenue à jour par l'administrateur)
 var annuaire = {}, annuaireRef = null, planRef = null, planEnvoiRef = null, planning = {}, planningEnvoi = {}, planDateSuivie = '';
-var monPlanRefs = [], monPlan = {}, ligneEdit = null;
+var monPlanRefs = [], monPlan = {}, ligneEdit = null, planErreur = false;
+// Lecture refusée par la base (règles Firebase pas encore mises à jour) : on le dit au lieu d'afficher une page vide
+function refusPlanning() { planErreur = true; renderPlanning(); renderMonPlanning(); }
 function decalerJour(d, n) { var x = new Date(d + 'T12:00:00'); x.setDate(x.getDate() + n); return x.getFullYear() + '-' + pad2(x.getMonth() + 1) + '-' + pad2(x.getDate()); }
 function demainStr() { return decalerJour(todayStr(), 1); }
 function majAnnuaire() {
@@ -2167,7 +2169,7 @@ function majAnnuaire() {
 }
 function subscribePlanning() {
   annuaireRef = db.ref(ROOT + '/annuaire');
-  annuaireRef.on('value', function(snap) { annuaire = snap.val() || {}; renderPlanning(); });
+  annuaireRef.on('value', function(snap) { annuaire = snap.val() || {}; renderPlanning(); }, refusPlanning);
   if (!$('planDate').value) $('planDate').value = demainStr();
   suivrePlanning();
 }
@@ -2179,15 +2181,16 @@ function suivrePlanning() {
   if (planEnvoiRef) planEnvoiRef.off();
   planning = {}; planningEnvoi = {};
   planRef = db.ref(ROOT + '/planning/' + d);
-  planRef.on('value', function(snap) { planning = snap.val() || {}; renderPlanning(); });
+  planRef.on('value', function(snap) { planning = snap.val() || {}; renderPlanning(); }, refusPlanning);
   planEnvoiRef = db.ref(ROOT + '/planningEnvoi/' + d);
-  planEnvoiRef.on('value', function(snap) { planningEnvoi = snap.val() || {}; renderPlanning(); });
+  planEnvoiRef.on('value', function(snap) { planningEnvoi = snap.val() || {}; renderPlanning(); }, refusPlanning);
+  renderPlanning();
 }
 function decalerPlanning(n) { $('planDate').value = decalerJour($('planDate').value || demainStr(), n); suivrePlanning(); }
 function arreterPlanning() {
   [annuaireRef, planRef, planEnvoiRef].concat(monPlanRefs).forEach(function(r) { if (r) r.off(); });
   annuaireRef = planRef = planEnvoiRef = null; monPlanRefs = []; monPlan = {};
-  annuaire = {}; planning = {}; planningEnvoi = {}; planDateSuivie = '';
+  annuaire = {}; planning = {}; planningEnvoi = {}; planDateSuivie = ''; planErreur = false;
   $('planCard').classList.add('hidden');
 }
 // État d'envoi d'un chauffeur pour la date affichée
@@ -2218,6 +2221,11 @@ function majTuilePlanning() {
 function renderPlanning() {
   if (!can('journees')) return;
   majTuilePlanning();
+  if (planErreur) {
+    $('planningCount').textContent = ''; $('planEnvoiTous').disabled = true;
+    $('planningList').innerHTML = '<div class="empty">🔒 La base refuse l\'accès au planning : les règles Firebase doivent être mises à jour (fichier regles-firebase.json), puis actualisez la page.</div>';
+    return;
+  }
   var d = planDateSuivie, ch = chauffeursPlanning();
   var etats = ch.map(function(c) { return etatPlanning(c.id); });
   var nb = function(x) { return etats.filter(function(e) { return x.indexOf(e) !== -1; }).length; };
@@ -2317,13 +2325,14 @@ function suivreMonPlanning() {
   [todayStr(), demainStr()].forEach(function(d) {
     monPlan[d] = { lignes: {}, envoi: {} };
     var r1 = db.ref(ROOT + '/planning/' + d + '/' + me.id), r2 = db.ref(ROOT + '/planningEnvoi/' + d + '/' + me.id);
-    r1.on('value', function(snap) { if (monPlan[d]) { monPlan[d].lignes = snap.val() || {}; renderMonPlanning(); } });
-    r2.on('value', function(snap) { if (monPlan[d]) { monPlan[d].envoi = snap.val() || {}; renderMonPlanning(); } });
+    r1.on('value', function(snap) { if (monPlan[d]) { monPlan[d].lignes = snap.val() || {}; renderMonPlanning(); } }, refusPlanning);
+    r2.on('value', function(snap) { if (monPlan[d]) { monPlan[d].envoi = snap.val() || {}; renderMonPlanning(); } }, refusPlanning);
     monPlanRefs.push(r1, r2);
   });
 }
 function renderMonPlanning() {
   if (!me || me.role !== 'chauffeur') return;
+  if (planErreur) { $('planCard').classList.add('hidden'); return; }
   var jours = [todayStr(), demainStr()].filter(function(d) { return monPlan[d]; });
   $('planCard').classList.remove('hidden');
   var html = jours.map(function(d) {
