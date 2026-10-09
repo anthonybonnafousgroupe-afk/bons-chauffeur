@@ -198,6 +198,11 @@
   .km-ok { margin-top: 10px; font-size: 15px; }
   .km-saisie { margin-top: 12px; text-align: left; }
   .km-saisie input { font-size: 18px; }
+  .rattrap-alerte { background: #fff4d6; border: 1px solid #f0c36d; border-radius: var(--radius); padding: 12px; margin-bottom: 12px; color: #6b4a00; }
+  .rattrap-alerte .btn { margin-top: 8px; }
+  .rattrapage { margin-top: 10px; padding: 12px; border-radius: var(--radius); background: #fff8e6; border: 1px dashed #f0c36d; }
+  .rattrapage .titre { font-weight: 800; color: #8a5a00; margin-bottom: 6px; }
+  .rattrapage .btn { margin-top: 6px; }
   .plan-jour { margin-bottom: 14px; }
   .plan-jour:last-child { margin-bottom: 0; }
   .plan-jour-titre { font-weight: 800; margin-bottom: 4px; }
@@ -357,6 +362,7 @@
       </div>
       <!-- Chauffeur : historique de ses journées passées -->
       <div class="card hidden" style="max-width:none;margin-bottom:16px" id="histoCard">
+        <div class="rattrap-alerte hidden" id="rattrapAlerte"></div>
         <button class="btn btn-secondary" id="histoBtn" onclick="basculerHisto()">📅 Voir mes journées passées</button>
         <div class="hidden" id="histoZone" style="margin-top:14px">
           <div class="field"><label>Mois</label><input id="histoMois" type="month" onchange="renderHisto()"></div>
@@ -563,7 +569,7 @@
 <script>
 // ── Version ──────────────────────────────────────────────────────────────────
 // ⚠️ Changer ce numéro à chaque modification du code
-var APP_VERSION = '0.35';
+var APP_VERSION = '0.35.1';
 
 // ── Firebase ─────────────────────────────────────────────────────────────────
 // Même projet Firebase que Suivi Parc et Carburant, mais toutes les données
@@ -978,6 +984,7 @@ function suivreJour() {
     journeeRef.on('value', function(snap) {
       var v = snap.val();
       suivreJournee(v && v.date === jourAffect ? v.cle : jourAffect);
+      verifierRattrapages();
     });
   }
 }
@@ -1138,7 +1145,7 @@ function carteJournee(j, admin) {
           (k.kmFin ? ' → fin <b>' + fmtCompteur(k.kmFin) + ' km</b>' + (k.km ? ' (<b>' + fmtCompteur(k.kmFin - k.km) + ' km</b> parcourus)' : '') : '') + '</div>'; }).join('') +
         (admin && can('journees') ? (function() { var ca = caJournee(j); return '<div>💶 Chiffre d\'affaires : <b>' + fmtEuro(ca.total) + ' HT</b>' +
           (ca.manque ? ' <span style="color:var(--warn)">(' + ca.manque + ' ligne' + (ca.manque > 1 ? 's' : '') + ' sans prix)</span>' : '') + '</div>'; })() : '') +
-        '<div>' + (j.terminee ? '🏁 Fin de journée validée à ' + heure(j.fin.valideLe) : '🚚 Journée en cours') +
+        '<div>' + (j.terminee ? '🏁 Fin de journée validée ' + (j.fin.rattrapeLe ? 'après coup, le ' + new Date(j.fin.valideLe).toLocaleDateString('fr-FR') + ' ' : '') + 'à ' + heure(j.fin.valideLe) : '🚚 Journée en cours') +
           (j.fin.hasLV ? '' : ' — lettre de voiture pas encore envoyée') + '</div>' +
         (admin && j.fin.saisi ? '<div class="saisi-info">✅ Saisie par ' + escHtml(j.fin.saisiPar || '?') + (j.fin.saisiLe ? ' le ' + new Date(j.fin.saisiLe).toLocaleDateString('fr-FR') : '') + '</div>' : '') +
       '</div>' +
@@ -1154,6 +1161,7 @@ function carteJournee(j, admin) {
           (e.hasBL ? '<button class="btn btn-secondary btn-small" onclick="voirPhoto(\'/bl/' + jsq(j.jk) + '/' + jsq(j.cid) + '/' + jsq(e.n) + '\')">🧾 Bon de livraison</button>'
                    : '<div class="item-sub" style="color:var(--warn)">Bon de livraison pas encore envoyé</div>') + '</div>';
       }).join('') + '</details>' : '') +
+      (!admin ? blocRattrapage(j) : '') +
       '<div class="item-actions">' +
         (j.fin.hasLV ? '<button class="btn btn-secondary btn-small" onclick="voirPhoto(\'/lv/' + jsq(j.jk) + '/' + jsq(j.cid) + '\')">🧾 Lettre de voiture</button>' : '') +
         (admin && j.terminee ? (j.fin.saisi
@@ -1161,6 +1169,110 @@ function carteJournee(j, admin) {
           : '<button class="btn btn-ok btn-small" onclick="setSaisi(' + k + ', true)">✅ Marquer saisie</button>') : '') +
         (admin && can('admin') ? '<button class="btn btn-danger btn-small" onclick="deleteJournee(' + k + ')">🗑️ Supprimer</button>' : '') +
       '</div></div>';
+}
+
+// ── Chauffeur : rattrapage d'une journée passée pas terminée (réseau coupé, oubli…) ──
+// Possible tant que le bureau ne l'a pas marquée « saisie » : bons manquants, lettre de voiture, km de fin, validation
+function aRattraper(j) {
+  return !!me && me.role === 'chauffeur' && j.cid === me.id && j.jk !== maJournee && !j.fin.saisi && j.etapes.length > 0 &&
+    (!j.terminee || !j.fin.hasLV || j.tours.some(function(e) { return !e.hasBL; }));
+}
+function blocRattrapage(j) {
+  if (!aRattraper(j)) return '';
+  var a = "'" + jsq(j.jk) + "'", h = '<div class="rattrapage" data-jk="' + escHtml(j.jk) + '"><div class="titre">⚠️ Journée pas terminée — à compléter</div>';
+  j.tours.filter(function(e) { return !e.hasBL; }).forEach(function(e) {
+    h += '<button class="btn btn-secondary btn-small" onclick="choisirRattrapage(' + a + ',' + Number(e.n) + ')">📷 Bon de livraison du ' + ordinal(e.numero || 1) + ' tour</button> ';
+  });
+  if (!j.fin.hasLV) h += '<button class="btn btn-secondary btn-small" onclick="choisirRattrapage(' + a + ',\'lv\')">📷 Envoyer la lettre de voiture</button>';
+  else if (!j.terminee) {
+    var sansFin = j.km.filter(function(k) { return k.km && !k.kmFin; });
+    h += '<div class="item-sub" style="margin-top:6px">✅ Lettre de voiture envoyée</div>' + sansFin.map(function(k, i) {
+      return '<div class="field km-saisie"><label>📏 Kilométrage de fin' + (sansFin.length > 1 ? ' — ' + escHtml(k.plaque) : '') + '</label>' +
+        '<input id="rkm' + i + '" data-plaque="' + escHtml(k.plaque) + '" data-dep="' + Number(k.km) + '" type="text" inputmode="numeric" placeholder="ex : 245 520">' +
+        '<div class="hint">Km de départ : ' + fmtCompteur(k.km) + ' km</div></div>';
+    }).join('') +
+      '<button class="btn btn-fin" style="width:100%;margin-top:10px" onclick="validerRattrapage(' + a + ', this)">🏁 Valider la fin de cette journée</button>';
+  }
+  return h + '</div>';
+}
+function choisirRattrapage(jk, n) { blCible = { jk: jk, n: n }; $('blPhoto').click(); }
+function envoyerRattrapage(c, data) {
+  var updates = {}, now = Date.now(), base = c.jk + '/' + me.id, j = histoJournees.filter(function(x) { return x.jk === c.jk; })[0];
+  updates[ROOT + '/mesJournees/' + me.id + '/' + c.jk] = true;
+  if (c.n === 'lv') {
+    updates[ROOT + '/lv/' + base] = data;
+    ['chauffeurId', me.id, 'chauffeurNom', me.nom, 'hasLV', true, 'lvLe', now].forEach(function(v, i, l) { if (i % 2 === 0) updates[ROOT + '/finJournee/' + base + '/' + v] = l[i + 1]; });
+    if (j && !j.fin.plaque && j.plaques[0]) updates[ROOT + '/finJournee/' + base + '/plaque'] = j.plaques[0];
+    if (!(j && j.fin.premierEnvoi)) updates[ROOT + '/finJournee/' + base + '/premierEnvoi'] = now;
+  } else {
+    updates[ROOT + '/bl/' + base + '/' + c.n] = data;
+    updates[ROOT + '/tours/' + base + '/' + c.n + '/hasBL'] = true;
+    updates[ROOT + '/tours/' + base + '/' + c.n + '/blLe'] = now;
+  }
+  showToast('⏳ Envoi de la photo…', true);
+  db.ref().update(updates).then(function() {
+    showToast(c.n === 'lv' ? '✅ Lettre de voiture envoyée' : '✅ Bon de livraison envoyé', true);
+    chargerHisto(); verifierRattrapages();
+  }).catch(function(e) { showToast('Échec de l\'envoi : ' + e.message); });
+}
+function validerRattrapage(jk, btn) {
+  var j = histoJournees.filter(function(x) { return x.jk === jk; })[0];
+  if (!j) return;
+  var zone = btn.parentNode, kms = {}, erreur = false;
+  Array.prototype.forEach.call(zone.querySelectorAll('input[data-plaque]'), function(inp) {
+    if (erreur) return;
+    var brut = inp.value.replace(/[\s.]/g, ''), v = Number(brut), dep = Number(inp.getAttribute('data-dep'));
+    if (!/^\d+$/.test(brut) || v <= 0 || v > 9999999) { showToast('Indiquez le kilométrage de fin du compteur (chiffres uniquement)'); inp.focus(); erreur = true; return; }
+    if (dep && v < dep) { showToast('Le kilométrage de fin (' + fmtCompteur(v) + ') est plus petit que celui du départ (' + fmtCompteur(dep) + ')'); inp.focus(); erreur = true; return; }
+    kms[inp.getAttribute('data-plaque')] = v;
+  });
+  if (erreur) return;
+  confirmer('Valider la fin de la journée du ' + fmtJour(j.date) + ' ?', { ok: 'Valider' }, function() {
+    var updates = {}, now = Date.now();
+    updates[ROOT + '/finJournee/' + jk + '/' + me.id + '/valideLe'] = now;
+    updates[ROOT + '/finJournee/' + jk + '/' + me.id + '/rattrapeLe'] = now;
+    Object.keys(kms).forEach(function(p) {
+      updates[ROOT + '/kilometrages/' + jk + '/' + me.id + '/' + p + '/kmFin'] = kms[p];
+      updates[ROOT + '/kilometrages/' + jk + '/' + me.id + '/' + p + '/kmFinLe'] = now;
+    });
+    btn.disabled = true;
+    db.ref().update(updates).then(function() {
+      showToast('✅ Journée du ' + fmtJour(j.date) + ' terminée', true);
+      chargerHisto(); verifierRattrapages();
+    }).catch(function(e) { showToast('Erreur : ' + e.message); btn.disabled = false; });
+  });
+}
+// Alerte sur l'accueil du chauffeur : journées des 30 derniers jours pas terminées
+function verifierRattrapages() {
+  if (!me || me.role !== 'chauffeur') return;
+  var limite = new Date(); limite.setDate(limite.getDate() - 30);
+  var depuis = limite.getFullYear() + '-' + pad2(limite.getMonth() + 1) + '-' + pad2(limite.getDate());
+  db.ref(ROOT + '/mesJournees/' + me.id).once('value').then(function(snap) {
+    var cles = Object.keys(snap.val() || {}).filter(function(jk) { return jk !== maJournee && jk.slice(0, 10) >= depuis; });
+    return Promise.all(cles.map(function(jk) {
+      return Promise.all([db.ref(ROOT + '/tours/' + jk + '/' + me.id).once('value'), db.ref(ROOT + '/finJournee/' + jk + '/' + me.id).once('value')])
+        .then(function(r) {
+          var t = r[0].val() || {}, f = r[1].val() || {}, tours = Object.keys(t).map(function(n) { return t[n]; }).filter(Boolean);
+          var ouverte = tours.length && !f.saisi && (!f.valideLe || !f.hasLV || tours.some(function(e) { return e.type !== 'transfert' && !e.hasBL; }));
+          return ouverte ? jk : null;
+        });
+    }));
+  }).then(function(l) {
+    l = (l || []).filter(Boolean).sort();
+    $('rattrapAlerte').classList.toggle('hidden', !l.length);
+    if (l.length) $('rattrapAlerte').innerHTML = '⚠️ ' + (l.length > 1 ? l.length + ' journées passées ne sont pas terminées' : 'La journée du <b>' + escHtml(fmtJour(l[0].slice(0, 10))) + '</b> n\'est pas terminée') +
+      ' (bon, lettre de voiture ou fin de journée manquants).<br><button class="btn btn-primary btn-small" onclick="allerRattrapage()">Compléter</button>';
+  }).catch(function() {});
+}
+function allerRattrapage() {
+  if (!histoOuvert) basculerHisto();
+  $('histoMois').value = '';
+  var essai = 0, chercher = function() {
+    var el = document.querySelector('#histoList .rattrapage');
+    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    else if (essai++ < 20) setTimeout(chercher, 250);
+  };
+  chercher();
 }
 
 // ── Chauffeur : historique de ses journées passées (chargé à la demande) ─────
@@ -1892,18 +2004,19 @@ function choisirBL(n) { blCible = n; $('blPhoto').click(); }
 function onPhotoBL(input) {
   var file = input.files && input.files[0], n = blCible;
   input.value = '';
-  if (!file || n == null || (n !== 'lv' && !mesTours[n])) return;
+  if (!file || n == null || (typeof n !== 'object' && n !== 'lv' && !mesTours[n])) return;
   var reader = new FileReader();
   reader.onload = function(e) {
     var img = new Image();
     img.onload = function() {
       // La lettre de voiture est plus dense : un peu plus de définition
-      var MAX = n === 'lv' ? 2000 : 1600, w = img.width, h = img.height;
+      var MAX = n === 'lv' || n.n === 'lv' ? 2000 : 1600, w = img.width, h = img.height;
       if (Math.max(w, h) > MAX) { var r = MAX / Math.max(w, h); w = Math.round(w * r); h = Math.round(h * r); }
       var c = document.createElement('canvas');
       c.width = w; c.height = h;
       c.getContext('2d').drawImage(img, 0, 0, w, h);
-      if (n === 'lv') envoyerLV(c.toDataURL('image/jpeg', 0.75));
+      if (typeof n === 'object') envoyerRattrapage(n, c.toDataURL('image/jpeg', n.n === 'lv' ? 0.75 : 0.72));
+      else if (n === 'lv') envoyerLV(c.toDataURL('image/jpeg', 0.75));
       else envoyerBL(n, c.toDataURL('image/jpeg', 0.72));
     };
     img.onerror = function() { showToast('Image illisible, reprenez la photo'); };
