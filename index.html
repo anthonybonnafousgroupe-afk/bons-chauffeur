@@ -220,6 +220,12 @@
   .onglets-centrales .client-carre { aspect-ratio: auto; height: 104px; }
   .onglets-centrales .client-carre:not(.actif) { opacity: .75; }
   .onglet-nb { font-size: 11px; color: var(--text-dim); text-align: center; font-weight: 600; }
+  #camionCard.replie { padding: 10px 14px; }
+  #camionCard.replie .card-title { display: none; }
+  .camion-ligne { width: 100%; display: flex; align-items: center; gap: 12px; background: none; border: none; font: inherit; color: inherit; text-align: left; cursor: pointer; padding: 0; }
+  .camion-ligne-info { flex: 1; font-size: 13px; color: var(--text-dim); line-height: 1.35; }
+  .camion-ligne-info b { color: var(--text); }
+  .camion-ligne-plus { font-size: 18px; color: var(--text-dim); }
   .client-sel { font: inherit; font-size: 13px; padding: 2px 6px; border: 1px solid #ddd; border-radius: 6px; background: #fff; }
   .plan-jour { margin-bottom: 14px; }
   .plan-jour:last-child { margin-bottom: 0; }
@@ -669,7 +675,7 @@
 <script>
 // ── Version ──────────────────────────────────────────────────────────────────
 // ⚠️ Changer ce numéro à chaque modification du code
-var APP_VERSION = '0.45';
+var APP_VERSION = '0.47';
 
 // ── Firebase ─────────────────────────────────────────────────────────────────
 // Même projet Firebase que Suivi Parc et Carburant, mais toutes les données
@@ -1104,7 +1110,7 @@ function suivreJournee(cle) {
   finRef = db.ref(ROOT + '/finJournee/' + cle + '/' + me.id);
   finRef.on('value', function(snap) { maFin = snap.val(); renderTour(); });
   if (kmRef) kmRef.off();
-  mesKm = {}; kmEdition = false; clientEdition = false;
+  mesKm = {}; kmEdition = false; clientEdition = false; camionDeplie = false;
   kmRef = db.ref(ROOT + '/kilometrages/' + cle + '/' + me.id);
   kmRef.on('value', function(snap) { mesKm = snap.val() || {}; renderCamionJour(); renderTour(); remplirCentrales(); });
   renderTour();
@@ -1745,15 +1751,27 @@ function renderCamionJour() {
   var p = monCamion();
   $('camionChoix').classList.toggle('hidden', !!p);
   $('camionPris').classList.toggle('hidden', !p);
+  $('camionCard').classList.toggle('replie', false);
   if (p) {
     var c = allCamions[p] || { plaque: p };
     $('camionCardTitle').textContent = '🚛 Mon camion du jour';
+    // Camion, client et km de départ renseignés : la carte se réduit à une ligne (touchez pour déplier)
+    if (!kmManquant() && !kmEdition && !camionDeplie) {
+      var k = mesKm[p] || {};
+      $('camionCard').classList.add('replie');
+      $('camionPris').innerHTML = '<button class="camion-ligne" onclick="camionDeplie = true; renderCamionJour()">' +
+        '<span class="plaque" style="font-size:14px">' + escHtml(p) + '</span>' +
+        '<span class="camion-ligne-info"><b>' + escHtml(nomClientTravail(k.client)) + '</b><br>départ ' + fmtCompteur(k.km) + ' km</span>' +
+        '<span class="camion-ligne-plus">▾</span></button>';
+      return;
+    }
     $('camionPris').innerHTML = '<span class="plaque">' + escHtml(p) + '</span>' +
       (descCamion(c) ? '<div class="item-sub"><b>' + escHtml(descCamion(c)) + '</b></div>' : '') +
       '<div class="item-sub">Pris à ' + heure(affectations[p].ts) + '</div>' + blocKm(p) +
       '<div class="input-row" style="justify-content:center;flex-wrap:wrap">' +
         '<button class="btn btn-secondary" onclick="changerCamion()">🔄 Changer de camion</button>' +
-        '<button class="btn btn-secondary" onclick="ouvrirDocsCamionChauffeur(\'' + jsq(p) + '\')">📁 Documents du camion</button></div>';
+        '<button class="btn btn-secondary" onclick="ouvrirDocsCamionChauffeur(\'' + jsq(p) + '\')">📁 Documents du camion</button></div>' +
+      (!kmManquant() && !kmEdition ? '<button class="btn btn-secondary btn-small" style="margin-top:10px" onclick="camionDeplie = false; renderCamionJour()">▴ Réduire</button>' : '');
     return;
   }
   $('camionCardTitle').textContent = '🚛 Choisissez votre camion du jour';
@@ -1776,7 +1794,7 @@ var CLIENTS_TRAVAIL = [
   { id: 'francois', nom: 'François Industrie' },
   { id: 'pointpso', nom: 'Point P Sud Ouest' }
 ];
-var clientEdition = false;
+var clientEdition = false, camionDeplie = false;
 function nomClientTravail(id) { var c = CLIENTS_TRAVAIL.filter(function(x) { return x.id === id; })[0]; return c ? c.nom : (id || ''); }
 function blocClient(p) {
   var k = mesKm[p] || {};
@@ -1793,7 +1811,7 @@ function choisirClient(id) {
   if (!p || !CLIENTS_TRAVAIL.some(function(c) { return c.id === id; })) return;
   db.ref(ROOT + '/mesJournees/' + me.id + '/' + maJournee).set(true).catch(function() {});
   db.ref(ROOT + '/kilometrages/' + maJournee + '/' + me.id + '/' + p).update({ client: id, clientLe: Date.now() }).then(function() {
-    clientEdition = false; showToast('✅ Client : ' + nomClientTravail(id), true); renderCamionJour(); renderTour(); remplirCentrales();
+    clientEdition = false; camionDeplie = false; showToast('✅ Client : ' + nomClientTravail(id), true); renderCamionJour(); renderTour(); remplirCentrales();
   }).catch(function(e) { showToast('Erreur : ' + e.message); });
 }
 // Kilométrage de départ : obligatoire avant le 1er tour avec ce camion
@@ -1820,7 +1838,7 @@ function enregistrerKm() {
   $('kmBtn').disabled = true;
   db.ref(ROOT + '/mesJournees/' + me.id + '/' + maJournee).set(true).catch(function() {});
   db.ref(ROOT + '/kilometrages/' + maJournee + '/' + me.id + '/' + p).update({ km: km, le: Date.now() }).then(function() {
-    kmEdition = false; showToast('✅ Kilométrage enregistré', true); renderCamionJour(); renderTour();
+    kmEdition = false; camionDeplie = false; showToast('✅ Kilométrage enregistré', true); renderCamionJour(); renderTour();
   }).catch(function(e) { showToast('Erreur : ' + e.message); $('kmBtn').disabled = false; });
 }
 function prendreCamion() {
@@ -2841,7 +2859,13 @@ var monPlanRefs = [], monPlan = {}, ligneEdit = null, planErreur = false;
 // Lecture refusée par la base (règles Firebase pas encore mises à jour) : on le dit au lieu d'afficher une page vide
 function refusPlanning() { planErreur = true; renderPlanning(); renderMonPlanning(); }
 function decalerJour(d, n) { var x = new Date(d + 'T12:00:00'); x.setDate(x.getDate() + n); return x.getFullYear() + '-' + pad2(x.getMonth() + 1) + '-' + pad2(x.getDate()); }
-function demainStr() { return decalerJour(todayStr(), 1); }
+// Prochain jour travaillé : pas de travail le week-end, le vendredi (et le week-end) c'est le lundi
+function demainStr() {
+  var d = decalerJour(todayStr(), 1);
+  while ([0, 6].indexOf(new Date(d + 'T12:00:00').getDay()) !== -1) d = decalerJour(d, 1);
+  return d;
+}
+function libProchain(d) { return d === decalerJour(todayStr(), 1) ? 'Demain' : 'Lundi'; }
 function majAnnuaire() {
   var a = {};
   Object.values(allUsers).forEach(function(u) { if (u && u.id) a[u.id] = { nom: u.nom, role: u.role || 'chauffeur', actif: u.actif !== false }; });
@@ -2897,7 +2921,7 @@ function majTuilePlanning() {
   if (!$('tuilePlanning')) return;
   if (planDateSuivie !== demainStr()) { $('tuilePlanning').textContent = ''; return; }
   var ch = chauffeursPlanning(), env = ch.filter(function(c) { return ['envoye', 'lu'].indexOf(etatPlanning(c.id)) !== -1; }).length;
-  $('tuilePlanning').textContent = 'Demain : ' + env + '/' + ch.length + ' envoyé' + (env > 1 ? 's' : '');
+  $('tuilePlanning').textContent = libProchain(demainStr()) + ' : ' + env + '/' + ch.length + ' envoyé' + (env > 1 ? 's' : '');
 }
 function renderPlanning() {
   if (!can('journees')) return;
@@ -2911,7 +2935,7 @@ function renderPlanning() {
   var etats = ch.map(function(c) { return etatPlanning(c.id); });
   var nb = function(x) { return etats.filter(function(e) { return x.indexOf(e) !== -1; }).length; };
   var aEnvoyer = nb(['brouillon', 'modifie']);
-  $('planningCount').textContent = fmtJour(d) + (d === demainStr() ? ' (demain)' : d === todayStr() ? ' (aujourd\'hui)' : '') + ' — ' +
+  $('planningCount').textContent = fmtJour(d) + (d === demainStr() ? ' (' + libProchain(d).toLowerCase() + ')' : d === todayStr() ? ' (aujourd\'hui)' : '') + ' — ' +
     nb(['envoye', 'lu']) + ' envoyé' + (nb(['envoye', 'lu']) > 1 ? 's' : '') + ', ' + nb(['lu']) + ' vu' + (nb(['lu']) > 1 ? 's' : '') +
     (aEnvoyer ? ', ' + aEnvoyer + ' à envoyer' : '');
   $('planEnvoiTous').disabled = !aEnvoyer;
@@ -3019,10 +3043,10 @@ function renderMonPlanning() {
   var html = jours.map(function(d) {
     var p = monPlan[d], e = p.envoi || {}, demain = d !== todayStr();
     // Brouillon du bureau pas encore envoyé : rien n'est montré
-    if (!e.envoyeLe) return demain ? '<div class="plan-jour"><div class="plan-jour-titre">Demain — ' + fmtJour(d) + '</div><div class="item-sub">Pas encore de convocation pour demain</div></div>' : '';
+    if (!e.envoyeLe) return demain ? '<div class="plan-jour"><div class="plan-jour-titre">' + libProchain(d) + ' — ' + fmtJour(d) + '</div><div class="item-sub">Pas encore de convocation pour ' + libProchain(d).toLowerCase() + '</div></div>' : '';
     var cv = p.lignes && p.lignes.heure ? p.lignes : null;
     var vu = e.luLe && e.luLe > e.envoyeLe;
-    return '<div class="plan-jour"><div class="plan-jour-titre">' + (demain ? 'Demain' : 'Aujourd\'hui') + ' — ' + fmtJour(d) + '</div>' +
+    return '<div class="plan-jour"><div class="plan-jour-titre">' + (demain ? libProchain(d) : 'Aujourd\'hui') + ' — ' + fmtJour(d) + '</div>' +
       (cv ? '<div style="font-size:16px;margin:6px 0">🕒 Convoqué à ' + texteConvocation(cv) + '</div>' : '<div class="item-sub">Pas de convocation</div>') +
       '<div class="item-sub">Envoyé par ' + escHtml(e.envoyePar || 'le bureau') + ' à ' + heure(e.envoyeLe) + '</div>' +
       (vu ? '<div class="item-sub" style="color:var(--ok)">✅ Vu à ' + heure(e.luLe) + '</div>'
