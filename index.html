@@ -658,6 +658,7 @@
 </div>
 
 <input type="file" id="blPhoto" accept="image/*" capture="environment" class="hidden" onchange="onPhotoBL(this)">
+<input type="file" id="blGalerie" accept="image/*" class="hidden" onchange="onPhotoBL(this)">
 <div class="modal-bg hidden" id="photoModal" onclick="closePhoto()">
   <button class="modal-close" onclick="closePhoto()">✕</button>
   <img id="modalImg" alt="Bon de livraison">
@@ -677,7 +678,7 @@
 <script>
 // ── Version ──────────────────────────────────────────────────────────────────
 // ⚠️ Changer ce numéro à chaque modification du code
-var APP_VERSION = '0.48';
+var APP_VERSION = '0.49';
 
 // ── Firebase ─────────────────────────────────────────────────────────────────
 // Même projet Firebase que Suivi Parc et Carburant, mais toutes les données
@@ -1541,7 +1542,8 @@ function blocRattrapage(j) {
   j.tours.filter(function(e) { return !e.hasBL; }).forEach(function(e) {
     h += '<button class="btn btn-secondary btn-small" onclick="choisirRattrapage(' + a + ',' + Number(e.n) + ')">📷 Bon de livraison du ' + ordinal(e.numero || 1) + ' tour</button> ';
   });
-  if (!j.fin.hasLV) h += '<button class="btn btn-secondary btn-small" onclick="choisirRattrapage(' + a + ',\'lv\')">📷 Envoyer la lettre de voiture</button>';
+  if (!j.fin.hasLV) h += '<button class="btn btn-secondary btn-small" onclick="choisirRattrapage(' + a + ',\'lv\')">📷 Envoyer la lettre de voiture</button> ' +
+    '<button class="btn btn-secondary btn-small" onclick="choisirRattrapage(' + a + ',\'lv\', true)">🖼️ Lettre de voiture depuis la galerie</button>';
   else if (!j.terminee) {
     var sansFin = j.km.filter(function(k) { return k.km && !k.kmFin; });
     h += '<div class="item-sub" style="margin-top:6px">✅ Lettre de voiture envoyée</div>' + sansFin.map(function(k, i) {
@@ -1553,7 +1555,7 @@ function blocRattrapage(j) {
   }
   return h + '</div>';
 }
-function choisirRattrapage(jk, n) { blCible = { jk: jk, n: n }; $('blPhoto').click(); }
+function choisirRattrapage(jk, n, galerie) { blCible = { jk: jk, n: n }; $(galerie ? 'blGalerie' : 'blPhoto').click(); }
 function envoyerRattrapage(c, data) {
   var updates = {}, now = Date.now(), base = c.jk + '/' + me.id, j = histoJournees.filter(function(x) { return x.jk === c.jk; })[0];
   updates[ROOT + '/mesJournees/' + me.id + '/' + c.jk] = true;
@@ -2346,7 +2348,8 @@ function renderFin(etapes) {
   if (maFin && maFin.hasLV) {
     $('finContenu').innerHTML = resume + '<div class="bl-ok">✅ Lettre de voiture envoyée à ' + heure(maFin.lvLe) +
       '<div class="item-actions"><button class="btn btn-secondary btn-small" onclick="voirLV()">👁️ Voir</button>' +
-      '<button class="btn btn-secondary btn-small" onclick="choisirBL(\'lv\')">🔄 Remplacer la photo</button></div></div>' +
+      '<button class="btn btn-secondary btn-small" onclick="choisirBL(\'lv\')">🔄 Remplacer la photo</button>' +
+      '<button class="btn btn-secondary btn-small" onclick="choisirBL(\'lv\', true)">🖼️ Galerie</button></div></div>' +
       '<div class="field km-saisie"><label>📏 Kilométrage de fin du camion (obligatoire)</label>' +
         '<input id="kmFin" type="text" inputmode="numeric" placeholder="ex : 245 520" value="' + escHtml(kmFinSaisi) + '" oninput="kmFinSaisi = this.value">' +
         '<div class="hint">' + (kmDepartActuel() ? 'Km de départ : ' + fmtCompteur(kmDepartActuel()) + ' km — ' : '') + 'relevez le compteur en fin de journée</div></div>' +
@@ -2355,6 +2358,7 @@ function renderFin(etapes) {
     $('finContenu').innerHTML = resume +
       '<div class="bl-zone" id="blZonelv" onclick="choisirBL(\'lv\')"><span class="big">📷</span>Envoyer la lettre de voiture journalière' +
       '<small>Prenez la lettre en photo, posée à plat et bien éclairée</small></div>' +
+      '<button class="btn btn-secondary" id="lvGalerieBtn" style="width:100%;margin-top:10px" onclick="choisirBL(\'lv\', true)">🖼️ Choisir une photo dans la galerie</button>' +
       '<button class="btn btn-secondary" style="margin-top:12px" onclick="fermerFinJournee()">↩️ Retour</button>';
   }
 }
@@ -2408,7 +2412,8 @@ function voirLV() {
 }
 
 var blCible = null;  // étape dont on envoie le bon ('lv' = lettre de voiture)
-function choisirBL(n) { blCible = n; $('blPhoto').click(); }
+// galerie = true : choisir une photo déjà prise (lettre de voiture) au lieu d'ouvrir l'appareil photo
+function choisirBL(n, galerie) { blCible = n; $(galerie ? 'blGalerie' : 'blPhoto').click(); }
 function onPhotoBL(input) {
   var file = input.files && input.files[0], n = blCible;
   input.value = '';
