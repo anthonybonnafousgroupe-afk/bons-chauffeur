@@ -259,6 +259,8 @@
   #tarifsPli > summary::after { content: '▼'; margin-left: auto; font-size: 12px; transition: transform .2s; }
   #tarifsPli[open] > summary::after { transform: rotate(180deg); }
   .km-table td.zero { color: var(--ok); font-weight: 700; }
+  .km-ligne { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 5px 0; border-bottom: 1px solid #eee; font-size: 14px; }
+  .km-ligne input { width: 80px; padding: 6px 8px; border: 1px solid #ddd; border-radius: 8px; font: inherit; text-align: right; }
   .tag.envoye { background: #e8f1fb; color: #1f5fa8; }
   .tag.modifie { background: #fff4e0; color: var(--warn); }
   .docs-panel { max-width: 520px; max-height: calc(100vh - 32px); overflow-y: auto; }
@@ -570,8 +572,8 @@
           <div id="tarifSpotListe"></div>
         </div>
         <button class="btn btn-primary" onclick="enregistrerTarifs()">💾 Enregistrer les tarifs</button>
-        <details style="margin-top:12px" id="kmDetails"><summary>Distances entre centrales Point P (km)</summary><div id="kmTable" style="overflow-x:auto"></div>
-          <div class="item-sub">0 km = transfert non facturé (Millau ↔ Saint-Affrique, Salles-Curan ↔ Réquista)</div></details>
+        <details style="margin-top:12px" id="kmDetails"><summary id="kmTitre">Distances entre centrales (km)</summary><div id="kmTable"></div>
+          <div class="item-sub">0 km = transfert non facturé (ex : Millau ↔ Saint-Affrique). Case vide = distance inconnue, le transfert reste « à vérifier ». Enregistrez avec le bouton ci-dessus.</div></details>
         </details>
       </div>
     </section>
@@ -675,7 +677,7 @@
 <script>
 // ── Version ──────────────────────────────────────────────────────────────────
 // ⚠️ Changer ce numéro à chaque modification du code
-var APP_VERSION = '0.47';
+var APP_VERSION = '0.48';
 
 // ── Firebase ─────────────────────────────────────────────────────────────────
 // Même projet Firebase que Suivi Parc et Carburant, mais toutes les données
@@ -1882,7 +1884,10 @@ function centralesTriees() {
   return Object.keys(allCentrales).map(function(k) { var c = allCentrales[k]; c.key = k; return c; })
     .sort(function(a, b) { return a.nom.localeCompare(b.nom); });
 }
-function centraleParNom(nom) { return centralesTriees().filter(function(c) { return c.nom === nom; })[0] || null; }
+function centraleParNom(nom) {
+  var l = centralesTriees(), k = cleCentrale(nom);
+  return l.filter(function(c) { return c.nom === nom; })[0] || (k ? l.filter(function(c) { return cleCentrale(c.nom) === k; })[0] : null) || null;
+}
 // Client à qui appartient une centrale (les centrales créées avant le choix du client sont des Point P)
 function clientCentrale(c) { return (c && c.client) || 'pointp'; }
 function clientDeCentraleNom(nom) { return clientCentrale(centraleParNom(nom)); }
@@ -2270,7 +2275,7 @@ function ecrireTour(f, avant, centrale, client, qte, adresse, zone, eau) {
   var distOk = !!(distInfo && distInfo.centrale === centrale && distInfo.adresse === adresse);
   btn.disabled = true;
   db.ref(ROOT + '/tours/' + maJournee + '/' + me.id + '/' + f.n).set({
-    type: 'tour', numero: numero, plaque: monCamion(), chauffeurId: me.id, chauffeurNom: me.nom,
+    type: 'tour', numero: numero, plaque: monCamion(), chauffeurId: me.id, chauffeurNom: me.nom, clientTravail: (mesKm[monCamion()] || {}).client || null,
     centrale: centrale, client: client, quantite: qte, adresse: adresse, zone: zone, gps: pointLivraison(adresse, avant, distOk),
     distanceKm: distOk ? distInfo.km : null, dureeMin: distOk ? distInfo.min : null,
     eauAjout: eau.ajout, eauLitres: eau.ajout ? eau.litres : null, commentaire: $('tComm').value.trim() || null,
@@ -2295,7 +2300,7 @@ function enregistrerTransfert() {
   btn.disabled = true;
   noterJournee();
   db.ref(ROOT + '/tours/' + maJournee + '/' + me.id + '/' + f.n).set({
-    type: 'transfert', plaque: monCamion(), chauffeurId: me.id, chauffeurNom: me.nom,
+    type: 'transfert', plaque: monCamion(), chauffeurId: me.id, chauffeurNom: me.nom, clientTravail: (mesKm[monCamion()] || {}).client || null,
     depart: depart, arrivee: arrivee, commentaire: $('trComm').value.trim() || null,
     enregistreLe: avant ? avant.enregistreLe : Date.now(), modifieLe: avant ? Date.now() : null
   }).then(function() {
@@ -3137,13 +3142,43 @@ function spotJournee(j) {
   return res;
 }
 // Client facturé pour une étape : celui de la centrale de départ
-function clientEtape(e) { return clientDeCentraleNom(e.type === 'transfert' ? e.depart : e.centrale); }
+// Une même ville peut avoir une centrale chez deux clients (ex : Millau) : on garde le client choisi par le chauffeur ce jour-là
+function clientEtape(e) {
+  var nom = e.type === 'transfert' ? e.depart : e.centrale, k = cleCentrale(nom);
+  if (e.clientTravail && centralesTriees().some(function(c) { return clientCentrale(c) === e.clientTravail && cleCentrale(c.nom) === k; })) return e.clientTravail;
+  return clientDeCentraleNom(nom);
+}
 // « Salles Curan », « ST AFFRIQUE », « Severac »… → nom du tableau des distances
 function nomCentraleKm(nom) {
   var n = String(nom || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z]/g, '').replace(/^st(?!e)/, 'saint');
   var cles = { millau: 'Millau', saintaffrique: 'Saint-Affrique', salle: 'Salles-Curan', requista: 'Réquista', severac: 'Sévérac-le-Château', rodez: 'Rodez', villefranche: 'Villefranche-de-Rouergue', mende: 'Mende' };
   for (var k in cles) if (n.indexOf(k) === 0) return cles[k];
   return null;
+}
+// Distances des transferts par client : saisies dans Tarifs (tarifs/{client}.distances = { 'cle1|cle2': km }),
+// sinon le tableau intégré (Point P Aveyron) ou les distances de départ ci-dessous
+var DISTANCES_DEFAUT = {
+  pointpso: { 'cazeres|lannemezan': 70, 'cazeres|saintgirons': 38, 'lannemezan|saintgirons': 76 },
+  francois: { 'millau|luclaprimaube': 63, 'millau|rodez': 68, 'millau|espalion': 70, 'millau|naucelle': 90 }
+};
+// « la primaube » = « luc la primaube » : même centrale si un nom finit par l'autre
+function memeCentrale(x, y) { return x === y || (x.length >= 4 && y.length >= 4 && (x.slice(-y.length) === y || y.slice(-x.length) === x)); }
+function cleCentrale(nom) {
+  return String(nom || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z]/g, '').replace(/^st(?!e)/, 'saint');
+}
+function clePaire(a, b) { var x = cleCentrale(a), y = cleCentrale(b); return x < y ? x + '|' + y : y + '|' + x; }
+function distancesSaisies(cl) { var g = (tarifs || {})[cl] || {}; return g.distances || {}; }
+function distanceClient(cl, a, b) {
+  if (!a || !b || cleCentrale(a) === cleCentrale(b)) return null;
+  var k = clePaire(a, b), s = distancesSaisies(cl);
+  if (s[k] != null && Number(s[k]) >= 0) return Number(s[k]);
+  if (cl === 'pointp') { var d = distanceKm(a, b); if (d != null) return d; }
+  var def = DISTANCES_DEFAUT[cl] || {}, ka = cleCentrale(a), kb = cleCentrale(b), res = null;
+  Object.keys(def).forEach(function(p) {
+    var x = p.split('|')[0], y = p.split('|')[1];
+    if (res == null && ((memeCentrale(ka, x) && memeCentrale(kb, y)) || (memeCentrale(ka, y) && memeCentrale(kb, x)))) res = def[p];
+  });
+  return res;
 }
 function distanceKm(a, b) {
   var x = nomCentraleKm(a), y = nomCentraleKm(b);
@@ -3165,7 +3200,7 @@ function montantCalcule(e, plaque, date) {
   if (prixSpot(cl, e.plaque || plaque, date) != null) return { base: 'inclus dans la location', montant: 0 };
   if (e.type === 'transfert') {
     // Tableau des distances connu seulement pour les centrales Point P
-    var km = cl === 'pointp' ? distanceKm(e.depart, e.arrivee) : null;
+    var km = distanceClient(cl, e.depart, e.arrivee);
     return { base: km == null ? 'distance inconnue' : km + ' km', montant: km == null ? null : km === 0 ? 0 : tf.prixKm == null ? null : arrondi2(km * tf.prixKm) };
   }
   var prix = tf.zones[e.zone];
@@ -3272,13 +3307,12 @@ function afficherModeTarif() {
   Array.prototype.forEach.call($('tarifMode').children, function(b) { b.classList.toggle('actif', b.getAttribute('data-mode') === m); });
   $('tarifZonier').classList.toggle('hidden', m !== 'zonier');
   $('tarifSpot').classList.toggle('hidden', m !== 'spot');
-  $('kmDetails').classList.toggle('hidden', m !== 'zonier' || tarifClientChoisi !== 'pointp');
+  $('kmDetails').classList.toggle('hidden', m !== 'zonier');
 }
 function renderTarifs(force) {
   $('tarifsCard').classList.toggle('hidden', !can('admin'));
   if (!can('admin') || (!force && document.activeElement && $('tarifsCard').contains(document.activeElement))) return;
   $('tarifClient').innerHTML = optionsClients(tarifClientChoisi);
-  $('kmDetails').classList.toggle('hidden', tarifClientChoisi !== 'pointp');
   var tf = tarifsActuels(tarifClientChoisi);
   $('tarifsZones').innerHTML = ZONES.map(function(z, i) {
     return '<div class="field"><label>' + z + ' (€)</label><input id="tarifZ' + i + '" type="text" inputmode="decimal" value="' + (tf.zones[z] != null ? escHtml(String(tf.zones[z]).replace('.', ',')) : '') + '"></div>';
@@ -3295,13 +3329,19 @@ function renderTarifs(force) {
       (passe.length ? '<div class="item-sub spot-histo">' + passe.map(function(x) { return fmtEuro(x.prix) + ' / jour du ' + fmtJourCourt(x.du) + ' au ' + fmtJourCourt(x.au); }).join(' — ') + '</div>' : '');
   }).join('') : '<div class="item-sub">Aucun camion enregistré.</div>';
   afficherModeTarif();
-  $('kmTable').innerHTML = '<table class="km-table"><tr><th></th>' + CENTRALES_KM.map(function(c) { return '<th>' + escHtml(c.split('-')[0].slice(0, 6)) + '</th>'; }).join('') + '</tr>' +
-    CENTRALES_KM.map(function(a) {
-      return '<tr><th>' + escHtml(a.split('-')[0]) + '</th>' + CENTRALES_KM.map(function(b) {
-        var d = a === b ? null : distanceKm(a, b);
-        return '<td' + (d === 0 ? ' class="zero"' : '') + '>' + (d == null ? '' : d) + '</td>';
-      }).join('') + '</tr>';
-    }).join('') + '</table>';
+  // Tableau des distances du client : une ligne par paire de centrales, modifiable
+  var cl = tarifClientChoisi, noms = [], vus = {};
+  centralesTriees().filter(function(c) { return clientCentrale(c) === cl && c.actif !== false; }).forEach(function(c) {
+    var k = cleCentrale(c.nom); if (k && !vus[k]) { vus[k] = 1; noms.push(c.nom); }
+  });
+  if (cl === 'pointp') CENTRALES_KM.forEach(function(n) { if (!noms.some(function(x) { return nomCentraleKm(x) === n; })) noms.push(n); });
+  var paires = [];
+  for (var i = 0; i < noms.length; i++) for (var j = i + 1; j < noms.length; j++) paires.push([noms[i], noms[j]]);
+  $('kmTitre').textContent = 'Distances entre centrales ' + nomClientTravail(cl) + ' (km)';
+  $('kmTable').innerHTML = paires.length ? paires.map(function(p, i) {
+    var d = distanceClient(cl, p[0], p[1]);
+    return '<div class="km-ligne"><span>' + escHtml(p[0]) + ' ↔ ' + escHtml(p[1]) + '</span><input id="kmP' + i + '" data-cle="' + escHtml(clePaire(p[0], p[1])) + '" type="text" inputmode="numeric" placeholder="km" value="' + (d == null ? '' : d) + '"></div>';
+  }).join('') : '<div class="item-sub">Ajoutez au moins deux centrales pour ce client (page Centrales) pour saisir les distances.</div>';
 }
 // Un changement (mise en spot, arrêt, nouveau prix) s'applique à partir d'aujourd'hui par défaut
 function spotModifie(i, coche) {
@@ -3315,7 +3355,16 @@ function spotModifie(i, coche) {
 function enregistrerTarifs() {
   if (!can('admin')) return;
   var cl = tarifClientChoisi, maj = {}, now = Date.now();
-  var nv = { zones: null, prixKm: null, spot: null, modifieLe: now, modifiePar: me.nom };
+  var nv = { zones: null, prixKm: null, spot: null, distances: null, modifieLe: now, modifiePar: me.nom };
+  // Distances des transferts : vide = inconnue (transfert « à vérifier »)
+  var dist = {}, nDist = 0, mauvais = null;
+  Array.prototype.forEach.call($('kmTable').querySelectorAll('input[data-cle]'), function(inp) {
+    var s = inp.value.trim().replace(',', '.'); if (!s || mauvais) return;
+    var v = Number(s); if (!(v >= 0) || v > 2000) { mauvais = inp; return; }
+    dist[inp.getAttribute('data-cle')] = v; nDist++;
+  });
+  if (mauvais) { choisirModeTarif('zonier'); $('kmDetails').open = true; showToast('Distance invalide : nombre de km uniquement'); mauvais.focus(); return; }
+  if (nDist) nv.distances = dist;
   // Zonier : tout rempli, ou tout vide (client uniquement en location à la journée)
   var zones = {}, ok = true, vides = 0;
   ZONES.forEach(function(z, i) { var s = $('tarifZ' + i).value.trim(), v = Number(s.replace(',', '.')); if (!s) vides++; else if (!(v >= 0)) ok = false; zones[z] = v; });
