@@ -184,6 +184,8 @@
     padding: 12px 18px; border-radius: 10px; font-size: 14px; font-weight: 600; z-index: 100; max-width: calc(100% - 32px); text-align: center;
     opacity: 0; pointer-events: none; transition: opacity .2s; }
   .toast.show { opacity: 1; }
+  .envois-attente { position: fixed; left: 50%; top: calc(64px + env(safe-area-inset-top)); transform: translateX(-50%); z-index: 90; background: #fff4d6; color: #7a5300;
+    border: 1px solid #f0c94d; padding: 6px 14px; border-radius: 20px; font-size: 13px; font-weight: 700; white-space: nowrap; box-shadow: 0 2px 8px rgba(0,0,0,.12); }
   .toast.ok { background: var(--ok); }
   .dlg-bg { position: fixed; inset: 0; background: rgba(0,0,0,.45); z-index: 60; display: flex; align-items: center; justify-content: center; padding: 16px; }
   .dlg { background: #fff; border-radius: var(--radius); box-shadow: 0 8px 40px rgba(0,0,0,.25); padding: 20px; width: 100%; max-width: 380px; }
@@ -605,6 +607,7 @@
 </div>
 
 <div class="toast" id="toast"></div>
+<div class="envois-attente hidden" id="envoisAttente"></div>
 
 <!-- Documents d'un chauffeur (permis, sécurité sociale, carte conducteur…) ou d'un camion (carte grise, assurance…) -->
 <div class="dlg-bg hidden" id="docsBg" onclick="if(event.target===this)fermerDocs()">
@@ -678,7 +681,7 @@
 <script>
 // ── Version ──────────────────────────────────────────────────────────────────
 // ⚠️ Changer ce numéro à chaque modification du code
-var APP_VERSION = '0.50';
+var APP_VERSION = '0.51';
 
 // ── Firebase ─────────────────────────────────────────────────────────────────
 // Même projet Firebase que Suivi Parc et Carburant, mais toutes les données
@@ -1006,8 +1009,73 @@ function doLogout() {
   $('bientotCard').classList.remove('hidden');
   $('adminTuiles').classList.add('hidden');
   me = null; allUsers = {}; allCamions = {}; affectations = {}; mesTours = {}; allCentrales = {};
+  envoisEnCours = {}; majEnvoisAttente();
   $('loginPwd').value = '';
   showScreen('loginScreen');
+}
+
+// ── Envois fiables : chaque envoi (photo, tour, fin de journée, plein…) est d'abord gardé sur le téléphone ──
+// Sans réseau, il reste en attente même si l'appli est fermée, et repart tout seul à la réouverture ou au retour du réseau.
+var reseauOk = true, envoisEnCours = {}, idbP = null, connRef = null;
+function idb() {
+  if (!idbP) idbP = new Promise(function(res, rej) {
+    if (!window.indexedDB) return rej(new Error('indexedDB indisponible'));
+    var rq = indexedDB.open('bonsChauffeur', 1);
+    rq.onupgradeneeded = function() { rq.result.createObjectStore('envois', { keyPath: 'id' }); };
+    rq.onsuccess = function() { res(rq.result); };
+    rq.onerror = function() { rej(rq.error); };
+  }).catch(function(e) { idbP = null; throw e; });
+  return idbP;
+}
+function idbOp(mode, fn) {
+  return idb().then(function(d) {
+    return new Promise(function(res, rej) {
+      var tx = d.transaction('envois', mode), rq = fn(tx.objectStore('envois'));
+      tx.oncomplete = function() { res(rq && rq.result); };
+      tx.onerror = tx.onabort = function() { rej(tx.error); };
+    });
+  });
+}
+function envoiFiable(updates, msgOk) {
+  var e = { id: Date.now() + '-' + Math.random().toString(36).slice(2, 8), uid: me.id, updates: updates, msgOk: msgOk || '', le: Date.now() };
+  return idbOp('readwrite', function(st) { return st.put(e); }).then(function() { return true; }, function() { return false; }).then(function(garde) {
+    // Pas de stockage possible sur ce téléphone : envoi direct, comme avant
+    if (!garde) return db.ref().update(updates).then(function() { if (msgOk) showToast(msgOk, true); });
+    if (!reseauOk) showToast('📶 Pas de réseau : c\'est gardé sur le téléphone et ça partira tout seul dès que le réseau revient', true);
+    lancerEnvoi(e);
+  });
+}
+function lancerEnvoi(e) {
+  if (envoisEnCours[e.id]) return;
+  envoisEnCours[e.id] = true; majEnvoisAttente();
+  db.ref().update(e.updates).then(function() {
+    delete envoisEnCours[e.id];
+    idbOp('readwrite', function(st) { return st.delete(e.id); }).catch(function() {});
+    if (e.msgOk) showToast(e.msgOk, true);
+    majEnvoisAttente();
+  }, function(err) {
+    delete envoisEnCours[e.id]; majEnvoisAttente();
+    // Refus du serveur (déconnexion en cours : on garde pour la prochaine connexion)
+    if (!me || me.id !== e.uid) return;
+    idbOp('readwrite', function(st) { return st.delete(e.id); }).catch(function() {});
+    showToast('Échec de l\'envoi : ' + err.message);
+  });
+}
+function relancerEnvois() {
+  idbOp('readonly', function(st) { return st.getAll(); }).then(function(l) {
+    (l || []).filter(function(e) { return me && e.uid === me.id; }).sort(function(a, b) { return a.le - b.le; }).forEach(lancerEnvoi);
+  }).catch(function() {});
+}
+function majEnvoisAttente() {
+  var n = Object.keys(envoisEnCours).length, el = $('envoisAttente');
+  if (!el) return;
+  el.classList.toggle('hidden', !n || !me);
+  el.textContent = reseauOk ? '📤 Envoi en cours (' + n + ')…' : '📶 ' + n + ' envoi' + (n > 1 ? 's' : '') + ' en attente de réseau';
+}
+function suivreReseau() {
+  if (connRef) return;
+  connRef = db.ref('.info/connected');
+  connRef.on('value', function(s) { reseauOk = s.val() !== false; majEnvoisAttente(); });
 }
 
 function startApp(u) {
@@ -1015,6 +1083,7 @@ function startApp(u) {
   storeSet(SESSION_KEY, JSON.stringify({ id: u.id, ts: Date.now() }));
   $('topUser').innerHTML = '<b>' + escHtml(me.nom) + '</b><span>' + roleOf(me).label + '</span>';
   $('welcome').textContent = 'Bonjour ' + me.nom;
+  suivreReseau(); relancerEnvois();
   // Administrateur : les onglets sont des tuiles sur l'accueil (plus de barre en bas)
   $('nav').classList.add('hidden');
   $('adminTuiles').classList.toggle('hidden', !can('journees'));
@@ -1446,15 +1515,18 @@ function savePlein() {
 }
 function envoyerPlein(lieu, plaque, c1, c2, km) {
   var btn = $('pSaveBtn'); btn.disabled = true; btn.textContent = 'Envoi en cours…';
-  db.ref(ROOT + '/users/' + me.id + '/carte').once('value').then(function(s) { return s.val() || ''; }, function() { return ''; }).then(function(carte) {
+  Promise.race([
+    db.ref(ROOT + '/users/' + me.id + '/carte').once('value').then(function(s) { return s.val() || ''; }, function() { return ''; }),
+    new Promise(function(res) { setTimeout(function() { res(''); }, 3000); })
+  ]).then(function(carte) {
     var key = db.ref(CARBU + '/pleins').push().key, u = {};
     // Photos rangées à part pour que la liste reste rapide à charger
     u[CARBU + '/photos/' + key] = pleinPhoto;
     if (pleinPhoto2) u[CARBU + '/photos2/' + key] = pleinPhoto2;
     u[CARBU + '/pleins/' + key] = { chauffeurId: me.id, chauffeurNom: me.nom, carte: carte, lieu: lieu, plaque: plaque, carburant: c1, carburant2: c2 || null,
       km: km, gps: pleinGps, date: Date.now(), hasPhoto: true, hasPhoto2: !!pleinPhoto2, source: 'bons' };
-    return db.ref().update(u);
-  }).then(function() { viderPlein(); showToast('✅ Plein enregistré, merci !', true); })
+    return envoiFiable(u, '✅ Plein enregistré, merci !');
+  }).then(function() { viderPlein(); })
     .catch(function(e) { showToast('Échec de l\'envoi : ' + e.message); })
     .then(function() { btn.disabled = false; btn.textContent = '✅ Enregistrer le plein'; });
 }
@@ -1571,8 +1643,7 @@ function envoyerRattrapage(c, data) {
     updates[ROOT + '/tours/' + base + '/' + c.n + '/blLe'] = now;
   }
   showToast('⏳ Envoi de la photo…', true);
-  db.ref().update(updates).then(function() {
-    showToast(c.n === 'lv' ? '✅ Lettre de voiture envoyée' : '✅ Bon de livraison envoyé', true);
+  envoiFiable(updates, c.n === 'lv' ? '✅ Lettre de voiture envoyée' : '✅ Bon de livraison envoyé').then(function() {
     chargerHisto(); verifierRattrapages();
   }).catch(function(e) { showToast('Échec de l\'envoi : ' + e.message); });
 }
@@ -1597,8 +1668,7 @@ function validerRattrapage(jk, btn) {
       updates[ROOT + '/kilometrages/' + jk + '/' + me.id + '/' + p + '/kmFinLe'] = now;
     });
     btn.disabled = true;
-    db.ref().update(updates).then(function() {
-      showToast('✅ Journée du ' + fmtJour(j.date) + ' terminée', true);
+    envoiFiable(updates, '✅ Journée du ' + fmtJour(j.date) + ' terminée').then(function() {
       chargerHisto(); verifierRattrapages();
     }).catch(function(e) { showToast('Erreur : ' + e.message); btn.disabled = false; });
   });
@@ -2314,15 +2384,16 @@ function ecrireTour(f, avant, centrale, client, qte, adresse, zone, eau) {
   var btn = $('tourSaveBtn'), numero = numeroTour(f.n), lib = ordinal(numero) + ' tour';
   var distOk = !!(distInfo && distInfo.centrale === centrale && distInfo.adresse === adresse);
   btn.disabled = true;
-  db.ref(ROOT + '/tours/' + maJournee + '/' + me.id + '/' + f.n).set({
+  var u = {};
+  u[ROOT + '/tours/' + maJournee + '/' + me.id + '/' + f.n] = {
     type: 'tour', numero: numero, plaque: monCamion(), chauffeurId: me.id, chauffeurNom: me.nom, clientTravail: (mesKm[monCamion()] || {}).client || null,
     centrale: centrale, client: client, quantite: qte, adresse: adresse, zone: zone, gps: pointLivraison(adresse, avant, distOk),
     distanceKm: distOk ? distInfo.km : null, dureeMin: distOk ? distInfo.min : null,
     eauAjout: eau.ajout, eauLitres: eau.ajout ? eau.litres : null, commentaire: $('tComm').value.trim() || null,
     hasBL: !!(avant && avant.hasBL), blLe: (avant && avant.blLe) || null,
     enregistreLe: avant ? avant.enregistreLe : Date.now(), modifieLe: avant ? Date.now() : null
-  }).then(function() {
-    showToast('✅ ' + lib + (avant ? ' modifié' : ' enregistré'), true);
+  };
+  envoiFiable(u, '✅ ' + lib + (avant ? ' modifié' : ' enregistré')).then(function() {
     etapeForm = null; viderFormTour(); $('choixTour').value = ''; effacerBrouillon();
     renderTour();
   }).catch(function(e) { showToast('Erreur : ' + e.message); })
@@ -2339,12 +2410,13 @@ function enregistrerTransfert() {
   var avant = f.edition ? mesTours[f.n] : null, btn = $('transfertSaveBtn');
   btn.disabled = true;
   noterJournee();
-  db.ref(ROOT + '/tours/' + maJournee + '/' + me.id + '/' + f.n).set({
+  var u = {};
+  u[ROOT + '/tours/' + maJournee + '/' + me.id + '/' + f.n] = {
     type: 'transfert', plaque: monCamion(), chauffeurId: me.id, chauffeurNom: me.nom, clientTravail: (mesKm[monCamion()] || {}).client || null,
     depart: depart, arrivee: arrivee, commentaire: $('trComm').value.trim() || null,
     enregistreLe: avant ? avant.enregistreLe : Date.now(), modifieLe: avant ? Date.now() : null
-  }).then(function() {
-    showToast(avant ? '✅ Transfert modifié' : '✅ Transfert enregistré', true);
+  };
+  envoiFiable(u, avant ? '✅ Transfert modifié' : '✅ Transfert enregistré').then(function() {
     etapeForm = null; effacerBrouillon();
     renderTour();
   }).catch(function(e) { showToast('Erreur : ' + e.message); })
@@ -2410,7 +2482,7 @@ function envoyerLV(data) {
     chauffeurId: me.id, chauffeurNom: me.nom, plaque: monCamion(), hasLV: true, lvLe: Date.now(),
     premierEnvoi: (maFin && maFin.premierEnvoi) || Date.now()
   };
-  db.ref().update(updates).then(function() { showToast('✅ Lettre de voiture envoyée', true); })
+  envoiFiable(updates, '✅ Lettre de voiture envoyée')
     .catch(function(e) { showToast('Échec de l\'envoi : ' + e.message); renderTour(); });
 }
 // Clôture : le camion est rendu, la journée est archivée et le chauffeur revient au choix du camion
@@ -2432,9 +2504,8 @@ function validerFinJournee() {
       updates[ROOT + '/affectations/' + jourAffect + '/' + p] = null;
     }
     updates[ROOT + '/journeeEnCours/' + me.id] = { cle: journeeSuivante(), date: jourAffect };
-    db.ref().update(updates).then(function() {
+    envoiFiable(updates, '✅ Journée terminée — vous pouvez démarrer une nouvelle journée').then(function() {
       kmFinSaisi = '';
-      showToast('✅ Journée terminée — vous pouvez démarrer une nouvelle journée', true);
       setTimeout(chargerHisto, 300);
       window.scrollTo(0, 0);
     }).catch(function(e) { showToast('Erreur : ' + e.message); if (btn) btn.disabled = false; });
@@ -2483,7 +2554,7 @@ function envoyerBL(n, data) {
   updates[ROOT + '/bl/' + base] = data;
   updates[ROOT + '/tours/' + base + '/hasBL'] = true;
   updates[ROOT + '/tours/' + base + '/blLe'] = Date.now();
-  db.ref().update(updates).then(function() { showToast('✅ Bon de livraison envoyé', true); })
+  envoiFiable(updates, '✅ Bon de livraison envoyé')
     .catch(function(e) { showToast('Échec de l\'envoi : ' + e.message); renderTour(); });
 }
 function voirBL(n) {
