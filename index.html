@@ -678,7 +678,7 @@
 <script>
 // ── Version ──────────────────────────────────────────────────────────────────
 // ⚠️ Changer ce numéro à chaque modification du code
-var APP_VERSION = '0.49';
+var APP_VERSION = '0.50';
 
 // ── Firebase ─────────────────────────────────────────────────────────────────
 // Même projet Firebase que Suivi Parc et Carburant, mais toutes les données
@@ -980,6 +980,7 @@ function migrerAcces(u, pwd) {
 
 function doLogout() {
   storeRemove(SESSION_KEY);
+  effacerBrouillon();
   firebase.auth().signOut();
   if (usersRef) usersRef.off();
   if (camionsRef) camionsRef.off();
@@ -1107,9 +1108,9 @@ function suivreJournee(cle) {
   maJournee = cle;
   if (toursRef) toursRef.off();
   if (finRef) finRef.off();
-  mesTours = {}; maFin = null; finOuvert = false; etapeForm = null;
+  mesTours = {}; maFin = null; finOuvert = false; etapeForm = null; toursCharges = false; brouillonVu = false;
   toursRef = db.ref(ROOT + '/tours/' + cle + '/' + me.id);
-  toursRef.on('value', function(snap) { mesTours = snap.val() || {}; renderTour(); });
+  toursRef.on('value', function(snap) { mesTours = snap.val() || {}; toursCharges = true; renderTour(); });
   finRef = db.ref(ROOT + '/finJournee/' + cle + '/' + me.id);
   finRef.on('value', function(snap) { maFin = snap.val(); renderTour(); });
   if (kmRef) kmRef.off();
@@ -1912,6 +1913,41 @@ var gpsAdresse = '';      // adresse remplie à partir de cette position
 var distInfo = null;      // { centrale, adresse, km, min } : dernière distance calculée
 var distSeq = 0, distTimer = null;
 
+// ── Brouillon du tour / transfert en cours de saisie ─────────────────────────
+// Gardé sur le téléphone : si le chauffeur ferme l'appli en pleine saisie, il retrouve
+// le formulaire tel qu'il l'avait laissé en la rouvrant (même journée seulement).
+var toursCharges = false, brouillonVu = false;
+var CHAMPS_BROUILLON = ['tCentrale', 'tClient', 'tQte', 'tAdresse', 'tZone', 'tComm', 'trDepart', 'trArrivee', 'trComm'];
+function cleBrouillon() { return me ? 'bonsBrouillon_' + me.id : null; }
+function sauverBrouillon() {
+  var k = cleBrouillon();
+  if (!k || !etapeForm || !maJournee || !brouillonVu) return;
+  var champs = {};
+  CHAMPS_BROUILLON.forEach(function(id) { if ($(id)) champs[id] = $(id).value; });
+  storeSet(k, JSON.stringify({ jk: maJournee, form: etapeForm, champs: champs, gpsPos: gpsPos, gpsAdresse: gpsAdresse, distInfo: distInfo, le: Date.now() }));
+}
+function effacerBrouillon() { var k = cleBrouillon(); if (k) storeRemove(k); }
+function restaurerBrouillon() {
+  brouillonVu = true;
+  var b = null;
+  try { b = JSON.parse(storeGet(cleBrouillon()) || 'null'); } catch (e) {}
+  if (!b || !b.form || b.jk !== maJournee) { effacerBrouillon(); return false; }
+  var f = b.form, n = f.n;
+  // Étape modifiée qui n'existe plus, ou nouvelle étape déjà enregistrée entre-temps : brouillon périmé
+  if (f.edition ? !mesTours[n] : !!mesTours[n]) { effacerBrouillon(); return false; }
+  if (f.type === 'tour') { viderFormTour(); ouvrirFormTour(n, !!f.edition); } else { etapeForm = { n: n, type: 'transfert', edition: !!f.edition }; remplirCentrales(); }
+  if (f.type === 'tour' && !f.edition && !etapesTriees().length) $('choixTour').value = '1';
+  CHAMPS_BROUILLON.forEach(function(id) { if ($(id) && b.champs && b.champs[id] != null) $(id).value = b.champs[id]; });
+  gpsPos = b.gpsPos || null; gpsAdresse = b.gpsAdresse || ''; distInfo = b.distInfo || null;
+  if (distInfo) { $('zoneHint').className = 'hint ok'; $('zoneHint').textContent = '🛣️ ' + fmtKm(distInfo.km) + ' depuis ' + distInfo.centrale + ' (≈ ' + fmtMin(distInfo.min) + ')'; }
+  renderTour();
+  showToast('✏️ Saisie en cours retrouvée', true);
+  allerAuFormulaire(f.type === 'tour' ? 'tourForm' : 'transfertForm');
+  return true;
+}
+document.addEventListener('input', function(e) { if (e.target && CHAMPS_BROUILLON.indexOf(e.target.id) !== -1) sauverBrouillon(); });
+document.addEventListener('change', function(e) { if (e.target && CHAMPS_BROUILLON.indexOf(e.target.id) !== -1) sauverBrouillon(); });
+
 function fmtKm(km) { return (Number(km) || 0).toLocaleString('fr-FR', { maximumFractionDigits: 1 }) + ' km'; }
 function fmtMin(min) { return min < 60 ? min + ' min' : Math.floor(min / 60) + ' h ' + String(min % 60).padStart(2, '0'); }
 // Base Adresse Nationale (adresses françaises, gratuite, sans compte) ; recherche
@@ -1962,7 +1998,7 @@ function choisirSuggestion(i) {
   var s = suggestions[i];
   if (!s) return;
   $('tAdresse').value = gpsAdresse = s.label;
-  gpsPos = { lat: Math.round(s.lat * 1e6) / 1e6, lng: Math.round(s.lng * 1e6) / 1e6, precision: null };
+  gpsPos = { lat: Math.round(s.lat * 1e6) / 1e6, lng: Math.round(s.lng * 1e6) / 1e6, precision: null }; setTimeout(sauverBrouillon, 0);
   $('adresseHint').className = 'hint'; $('adresseHint').textContent = '';
   cacherSuggestions();
   calculerDistance();
@@ -2007,7 +2043,7 @@ function calculerDistance() {
     return itineraire(p[0], p[1]).then(function(r) { r.dest = { lat: Math.round(p[1].lat * 1e6) / 1e6, lng: Math.round(p[1].lng * 1e6) / 1e6 }; return r; });
   }).then(function(r) {
     if (seq !== distSeq) return;
-    distInfo = { centrale: c, adresse: adr, km: r.km, min: r.min, dest: r.dest };
+    distInfo = { centrale: c, adresse: adr, km: r.km, min: r.min, dest: r.dest }; setTimeout(sauverBrouillon, 0);
     var z = zoneDe(r.km);
     $('tZone').value = z;
     hint.className = 'hint ok';
@@ -2048,7 +2084,7 @@ function localiser() {
   var fin = function() { btn.disabled = false; btn.textContent = '📍 Me localiser'; };
   navigator.geolocation.getCurrentPosition(function(pos) {
     var lat = pos.coords.latitude, lng = pos.coords.longitude;
-    gpsPos = { lat: Math.round(lat * 1e6) / 1e6, lng: Math.round(lng * 1e6) / 1e6, precision: Math.round(pos.coords.accuracy) };
+    gpsPos = { lat: Math.round(lat * 1e6) / 1e6, lng: Math.round(lng * 1e6) / 1e6, precision: Math.round(pos.coords.accuracy) }; setTimeout(sauverBrouillon, 0);
     hint.textContent = 'Recherche de l\'adresse…';
     adresseProche(lat, lng).then(function(adr) {
       if (!adr) throw new Error('vide');
@@ -2115,6 +2151,8 @@ function renderTour() {
   $('bientotCard').classList.add('hidden');
   $('histoCard').classList.remove('hidden');
   if (!camion) return;
+  if (!brouillonVu && toursCharges && restaurerBrouillon()) return;
+  if (f) sauverBrouillon();
   $('tourSelField').classList.toggle('hidden', !!etapes.length);
   $('tourForm').classList.toggle('hidden', !f || f.type !== 'tour');
   $('transfertForm').classList.toggle('hidden', !f || f.type !== 'transfert');
@@ -2208,7 +2246,7 @@ function transfertCentrale() {
   allerAuFormulaire('transfertForm');
 }
 function fermerTour() {
-  etapeForm = null; viderFormTour();
+  etapeForm = null; viderFormTour(); effacerBrouillon();
   $('choixTour').value = '';
   renderTour();
 }
@@ -2285,7 +2323,7 @@ function ecrireTour(f, avant, centrale, client, qte, adresse, zone, eau) {
     enregistreLe: avant ? avant.enregistreLe : Date.now(), modifieLe: avant ? Date.now() : null
   }).then(function() {
     showToast('✅ ' + lib + (avant ? ' modifié' : ' enregistré'), true);
-    etapeForm = null; viderFormTour(); $('choixTour').value = '';
+    etapeForm = null; viderFormTour(); $('choixTour').value = ''; effacerBrouillon();
     renderTour();
   }).catch(function(e) { showToast('Erreur : ' + e.message); })
     .then(function() { btn.disabled = false; });
@@ -2307,7 +2345,7 @@ function enregistrerTransfert() {
     enregistreLe: avant ? avant.enregistreLe : Date.now(), modifieLe: avant ? Date.now() : null
   }).then(function() {
     showToast(avant ? '✅ Transfert modifié' : '✅ Transfert enregistré', true);
-    etapeForm = null;
+    etapeForm = null; effacerBrouillon();
     renderTour();
   }).catch(function(e) { showToast('Erreur : ' + e.message); })
     .then(function() { btn.disabled = false; });
