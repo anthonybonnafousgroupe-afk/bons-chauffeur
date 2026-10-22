@@ -660,6 +660,22 @@
   </div>
 </div>
 
+<!-- Administrateur / bureau : ajouter ou corriger un transfert oublié par le chauffeur -->
+<div class="dlg-bg hidden" id="trAdmBg">
+  <div class="dlg" role="dialog" aria-modal="true">
+    <div class="dlg-titre" id="trAdmTitre">🔄 Transfert</div>
+    <div class="field"><label>Centrale de départ *</label><select id="taDepart"></select></div>
+    <div class="field"><label>Centrale d'arrivée *</label><select id="taArrivee"></select></div>
+    <div class="field" id="taPosField"><label>Placer ce transfert</label><select id="taPos" onchange="taPositionChangee()"></select></div>
+    <div class="field"><label>Commentaire</label><textarea id="taComm" rows="2" maxlength="500" placeholder="Facultatif — ex : oublié par le chauffeur"></textarea></div>
+    <div class="dlg-btns">
+      <button class="btn btn-secondary" onclick="fermerTrAdm()">Annuler</button>
+      <button class="btn btn-primary" id="taSaveBtn" onclick="enregistrerTrAdm()">Enregistrer</button>
+    </div>
+    <button class="btn btn-danger btn-small hidden" id="taSuppr" style="width:100%;margin-top:10px" onclick="supprimerTrAdm()">🗑️ Supprimer ce transfert</button>
+  </div>
+</div>
+
 <input type="file" id="blPhoto" accept="image/*" capture="environment" class="hidden" onchange="onPhotoBL(this)">
 <input type="file" id="blGalerie" accept="image/*" class="hidden" onchange="onPhotoBL(this)">
 <div class="modal-bg hidden" id="photoModal" onclick="closePhoto()">
@@ -681,7 +697,7 @@
 <script>
 // ── Version ──────────────────────────────────────────────────────────────────
 // ⚠️ Changer ce numéro à chaque modification du code
-var APP_VERSION = '0.51';
+var APP_VERSION = '0.52';
 
 // ── Firebase ─────────────────────────────────────────────────────────────────
 // Même projet Firebase que Suivi Parc et Carburant, mais toutes les données
@@ -1241,7 +1257,7 @@ function toutesJournees(srcTours, srcFins, srcKm) {
   });
   return Object.values(res).map(function(j) {
     var et = (srcTours[j.jk] || {})[j.cid] || {}, fin = (srcFins[j.jk] || {})[j.cid] || {};
-    var nums = Object.keys(et).map(Number).filter(function(n) { return et[n]; }).sort(function(a, b) { return a - b; });
+    var nums = Object.keys(et).map(Number).filter(function(n) { return et[n]; }).sort(function(a, b) { return ordreEtape(et[a], a) - ordreEtape(et[b], b) || a - b; });
     var etapes = nums.map(function(n) { return Object.assign({}, et[n], { n: n, _jk: j.jk, _cid: j.cid }); });
     var tours = etapes.filter(function(e) { return e.type !== 'transfert'; });
     var plaques = [];
@@ -1343,7 +1359,9 @@ function carteJournee(j, admin) {
       (j.etapes.length ? '<details class="etapes" data-k="' + escHtml(j.jk + '|' + j.cid) + '"><summary>Détail des tours</summary>' + j.etapes.map(function(e) {
         var comm = e.commentaire ? '<div class="item-sub">💬 <i>' + escHtml(e.commentaire) + '</i></div>' : '';
         if (e.type === 'transfert') return '<div class="etape">🔄 <b>Transfert</b> ' + escHtml(e.depart) + ' → ' + escHtml(e.arrivee) +
-          ' <span class="item-sub">(' + heure(e.enregistreLe) + ')</span>' + prixEtape(e, admin, j) + comm + '</div>';
+          ' <span class="item-sub">(' + (e.ajoutePar ? 'ajouté par ' + escHtml(e.ajoutePar) : heure(e.enregistreLe)) + (e.modifiePar ? ', modifié par ' + escHtml(e.modifiePar) : '') + ')</span>' +
+          prixEtape(e, admin, j) +
+          (admin && can('journees') ? ' <button class="btn btn-secondary btn-small" onclick="ouvrirTransfertAdmin(' + k + ',' + Number(e.n) + ')">✏️ Modifier</button>' : '') + comm + '</div>';
         return '<div class="etape"><b>' + ordinal(e.numero || 1) + ' tour</b> — ' + escHtml(e.centrale) + ' → <b>' + escHtml(e.client) + '</b> — ' + escHtml(fmtQte(e.quantite)) +
           '<div class="item-sub">' + escHtml(e.adresse) + ' ' + lienCarte(e) + '</div>' +
           '<div class="item-sub">' + texteGps(e) + '</div>' +
@@ -1351,7 +1369,7 @@ function carteJournee(j, admin) {
           ' — ' + (e.eauAjout ? '💧 ' + fmtNombre(e.eauLitres) + ' L' : 'sans eau') + ' — ' + heure(e.enregistreLe) + prixEtape(e, admin, j) + '</div>' + comm +
           (e.hasBL ? '<button class="btn btn-secondary btn-small" onclick="voirPhoto(\'/bl/' + jsq(j.jk) + '/' + jsq(j.cid) + '/' + jsq(e.n) + '\')">🧾 Bon de livraison</button>'
                    : '<div class="item-sub" style="color:var(--warn)">Bon de livraison pas encore envoyé</div>') + '</div>';
-      }).join('') + '</details>' : '') +
+      }).join('') + (admin && can('journees') ? '<button class="btn btn-secondary btn-small" style="margin-top:8px" onclick="ouvrirTransfertAdmin(' + k + ', null)">➕ Ajouter un transfert</button>' : '') + '</details>' : '') +
       (!admin ? blocRattrapage(j) : '') +
       '<div class="item-actions">' +
         (j.fin.hasLV ? '<button class="btn btn-secondary btn-small" onclick="voirPhoto(\'/lv/' + jsq(j.jk) + '/' + jsq(j.cid) + '\')">🧾 Lettre de voiture</button>' : '') +
@@ -2182,8 +2200,10 @@ function fmtQte(q) { return String(q).replace('.', ',') + ' m³'; }
 
 // La journée du chauffeur est une suite d'étapes (tours et transferts) rangées à /tours/{jour}/{chauffeur}/{n}
 function ordinal(n) { n = Math.round(Number(n)) || 1; return n === 1 ? '1er' : n + 'e'; }
-function etapesTriees() { return Object.keys(mesTours).map(Number).filter(function(n) { return mesTours[n]; }).sort(function(a, b) { return a - b; }); }
-function prochaineEtape() { var k = etapesTriees(); return k.length ? k[k.length - 1] + 1 : 1; }
+function etapesTriees() { return Object.keys(mesTours).map(Number).filter(function(n) { return mesTours[n]; }).sort(function(a, b) { return ordreEtape(mesTours[a], a) - ordreEtape(mesTours[b], b) || a - b; }); }
+// Position d'une étape dans la journée : son numéro, sauf transfert ajouté après coup par le bureau (champ ordre)
+function ordreEtape(e, n) { return e && e.ordre != null ? Number(e.ordre) : Number(n); }
+function prochaineEtape() { var k = etapesTriees(); return k.length ? Math.max.apply(null, k) + 1 : 1; }
 function estTransfert(n) { return mesTours[n] && mesTours[n].type === 'transfert'; }
 // Numéro du tour (1er, 2e…) : les transferts ne comptent pas
 function numeroTour(n) {
@@ -3205,6 +3225,85 @@ function subscribeTarifs() {
   prixManuelsRef.on('value', function(snap) { prixManuels = snap.val() || {}; renderFacturation(); renderJournees(); }, function() { prixManuels = {}; });
 }
 function prixManuel(e) { var p = e && e._jk ? ((prixManuels[e._jk] || {})[e._cid] || {})[e.n] : null; return p && p.montant != null && Number(p.montant) >= 0 ? p : null; }
+// ── Administrateur / bureau : transfert oublié ou mal saisi par le chauffeur ──
+var trAdm = null;
+function etapesJournee(jk, cid) {
+  var et = (tousTours[jk] || {})[cid] || {};
+  return Object.keys(et).map(Number).filter(function(n) { return et[n]; })
+    .sort(function(a, b) { return ordreEtape(et[a], a) - ordreEtape(et[b], b) || a - b; })
+    .map(function(n) { return Object.assign({}, et[n], { n: n }); });
+}
+function libEtape(e) { return e.type === 'transfert' ? 'transfert ' + e.depart + ' → ' + e.arrivee : ordinal(e.numero || 1) + ' tour (' + (e.centrale || '') + ' → ' + (e.client || '') + ')'; }
+function ouvrirTransfertAdmin(jk, cid, n) {
+  if (!can('journees')) return;
+  var l = etapesJournee(jk, cid), e = n != null ? ((tousTours[jk] || {})[cid] || {})[n] : null;
+  if (n != null && !e) return;
+  trAdm = { jk: jk, cid: cid, n: n };
+  var noms = centralesTriees().filter(function(c) { return c.actif !== false; }).map(function(c) { return c.nom; });
+  [e && e.depart, e && e.arrivee].forEach(function(v) { if (v && noms.indexOf(v) === -1) noms.push(v); });
+  var opts = '<option value="">— Choisir la centrale —</option>' + noms.map(function(x) { return '<option>' + escHtml(x) + '</option>'; }).join('');
+  $('taDepart').innerHTML = opts; $('taArrivee').innerHTML = opts;
+  $('trAdmTitre').textContent = e ? '🔄 Modifier le transfert' : '🔄 Ajouter un transfert';
+  $('taPosField').classList.toggle('hidden', !!e);
+  $('taSuppr').classList.toggle('hidden', !e || !can('admin'));
+  if (e) {
+    $('taDepart').value = e.depart || ''; $('taArrivee').value = e.arrivee || ''; $('taComm').value = e.commentaire || '';
+  } else {
+    $('taPos').innerHTML = '<option value="-1">Au début de la journée</option>' +
+      l.map(function(x, i) { return '<option value="' + i + '">Après le ' + escHtml(libEtape(x)) + '</option>'; }).join('');
+    $('taPos').value = String(l.length - 1);
+    $('taArrivee').value = ''; $('taComm').value = '';
+    taPositionChangee();
+  }
+  $('trAdmBg').classList.remove('hidden');
+}
+// Départ pré-rempli : là où se trouve le camion à cet endroit de la journée
+function taPositionChangee() {
+  if (!trAdm || trAdm.n != null) return;
+  var l = etapesJournee(trAdm.jk, trAdm.cid), p = l[Number($('taPos').value)];
+  $('taDepart').value = p ? (p.type === 'transfert' ? p.arrivee : p.centrale) || '' : '';
+}
+function fermerTrAdm() { trAdm = null; $('trAdmBg').classList.add('hidden'); }
+function enregistrerTrAdm() {
+  var a = trAdm;
+  if (!a || !can('journees')) return;
+  var dep = $('taDepart').value, arr = $('taArrivee').value, comm = $('taComm').value.trim() || null;
+  if (!dep) { showToast('Choisissez la centrale de départ'); $('taDepart').focus(); return; }
+  if (!arr) { showToast("Choisissez la centrale d'arrivée"); $('taArrivee').focus(); return; }
+  if (dep === arr) { showToast("La centrale d'arrivée doit être différente du départ"); $('taArrivee').focus(); return; }
+  var base = ROOT + '/tours/' + a.jk + '/' + a.cid + '/', u = {}, now = Date.now();
+  if (a.n != null) {
+    u[base + a.n + '/depart'] = dep; u[base + a.n + '/arrivee'] = arr; u[base + a.n + '/commentaire'] = comm;
+    u[base + a.n + '/modifiePar'] = me.nom; u[base + a.n + '/modifieLe'] = now;
+  } else {
+    var l = etapesJournee(a.jk, a.cid), i = Number($('taPos').value), prev = l[i], next = l[i + 1];
+    var n = l.length ? Math.max.apply(null, l.map(function(x) { return x.n; })) + 1 : 1;
+    var o = function(x) { return ordreEtape(x, x.n); };
+    // Placé entre deux étapes : ordre intermédiaire ; à la fin : pas besoin d'ordre
+    var ordre = !next ? null : !prev ? o(next) - 1 : (o(prev) + o(next)) / 2;
+    var j = toutesJournees().filter(function(x) { return x.jk === a.jk && x.cid === a.cid; })[0] || { plaques: [], km: [] };
+    var plaque = (prev && prev.plaque) || (next && next.plaque) || j.plaques[0] || null;
+    var km = j.km.filter(function(k) { return k.plaque === plaque; })[0] || j.km[0] || {};
+    u[base + n] = { type: 'transfert', plaque: plaque, chauffeurId: a.cid, chauffeurNom: j.nom || a.cid, clientTravail: km.clientId || (prev && prev.clientTravail) || null,
+      depart: dep, arrivee: arr, commentaire: comm, ordre: ordre,
+      enregistreLe: prev ? prev.enregistreLe : next ? next.enregistreLe : now, ajoutePar: me.nom, ajouteLe: now };
+  }
+  $('taSaveBtn').disabled = true;
+  db.ref().update(u).then(function() { showToast(a.n != null ? '✅ Transfert modifié' : '✅ Transfert ajouté', true); fermerTrAdm(); })
+    .catch(function(e) { showToast('Erreur : ' + e.message); }).then(function() { $('taSaveBtn').disabled = false; });
+}
+function supprimerTrAdm() {
+  var a = trAdm;
+  if (!a || a.n == null || !can('admin')) return;
+  $('trAdmBg').classList.add('hidden');
+  confirmer('Supprimer ce transfert ?', { ok: 'Supprimer', danger: true }, function() {
+    var u = {};
+    u[ROOT + '/tours/' + a.jk + '/' + a.cid + '/' + a.n] = null;
+    u[ROOT + '/prixManuels/' + a.jk + '/' + a.cid + '/' + a.n] = null;
+    db.ref().update(u).then(function() { showToast('Transfert supprimé'); fermerTrAdm(); }).catch(function(e) { showToast('Erreur : ' + e.message); });
+  });
+}
+
 function modifierPrix(jk, cid, n, plaque, date) {
   if (!can('journees')) return;
   var e = Object.assign({}, ((tousTours[jk] || {})[cid] || {})[n], { n: n, _jk: jk, _cid: cid });
