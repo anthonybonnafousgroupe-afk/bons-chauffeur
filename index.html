@@ -118,6 +118,7 @@
   .tag.type { background: #e8f1fb; color: #1f5fa8; }
   .tag.off { background: #fbe9d7; color: var(--warn); }
   .tag.ok { background: #e3f5ea; color: var(--ok); }
+  .tag.atelier { background: #ece7f8; color: #5b3fa8; }
   .summary { font-size: 13px; color: var(--text-dim); margin: 6px 0 12px; }
   .summary.export { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
   .filters { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 10px; }
@@ -353,6 +354,8 @@
           <div class="field"><label>Camions disponibles</label><select id="choixCamion"></select>
             <div class="hint" id="choixHint"></div></div>
           <button class="btn btn-primary" id="prendreBtn" onclick="prendreCamion()">✅ Prendre ce camion</button>
+          <div class="hint" style="text-align:center;margin:12px 0 6px">ou, si vous n'êtes pas sur un camion aujourd'hui :</div>
+          <button class="btn btn-secondary" id="atelierBtn" style="width:100%" onclick="choisirAtelier()">🔧 Atelier</button>
         </div>
         <div class="camion-jour hidden" id="camionPris"></div>
       </div>
@@ -676,6 +679,26 @@
   </div>
 </div>
 
+<!-- Administrateur / bureau : ajouter ou corriger un tour oublié par le chauffeur -->
+<div class="dlg-bg hidden" id="toAdmBg">
+  <div class="dlg" role="dialog" aria-modal="true" style="max-height:92vh;overflow:auto">
+    <div class="dlg-titre" id="toAdmTitre">🚚 Tour</div>
+    <div class="field" id="toPosField"><label>Placer ce tour</label><select id="toPos" onchange="toPositionChangee()"></select></div>
+    <div class="field"><label>Centrale à béton de départ *</label><select id="toCentrale" onchange="toCalculer()"></select></div>
+    <div class="field"><label>Nom du client *</label><input id="toClient" autocomplete="off" maxlength="120" placeholder="Ex : SARL Martin BTP"></div>
+    <div class="field"><label>Quantité (m³) *</label><input id="toQte" type="text" inputmode="decimal" autocomplete="off" placeholder="Ex : 8,5"></div>
+    <div class="field"><label>Adresse de livraison *</label><input id="toAdresse" autocomplete="off" maxlength="200" placeholder="Ex : 12 rue des Lilas, Onet-le-Château" onchange="toCalculer()"></div>
+    <div class="field"><label>Zone *</label><select id="toZone"></select><div class="hint" id="toZoneHint"></div></div>
+    <div class="field"><label>Eau ajoutée (litres)</label><input id="toEau" type="text" inputmode="decimal" autocomplete="off" placeholder="Laisser vide si sans eau"></div>
+    <div class="field"><label>Commentaire</label><textarea id="toComm" rows="2" maxlength="500" placeholder="Facultatif — ex : oublié par le chauffeur"></textarea></div>
+    <div class="dlg-btns">
+      <button class="btn btn-secondary" onclick="fermerToAdm()">Annuler</button>
+      <button class="btn btn-primary" id="toSaveBtn" onclick="enregistrerToAdm()">Enregistrer</button>
+    </div>
+    <button class="btn btn-danger btn-small hidden" id="toSuppr" style="width:100%;margin-top:10px" onclick="supprimerToAdm()">🗑️ Supprimer ce tour</button>
+  </div>
+</div>
+
 <input type="file" id="blPhoto" accept="image/*" capture="environment" class="hidden" onchange="onPhotoBL(this)">
 <input type="file" id="blGalerie" accept="image/*" class="hidden" onchange="onPhotoBL(this)">
 <div class="modal-bg hidden" id="photoModal" onclick="closePhoto()">
@@ -697,7 +720,7 @@
 <script>
 // ── Version ──────────────────────────────────────────────────────────────────
 // ⚠️ Changer ce numéro à chaque modification du code
-var APP_VERSION = '0.52';
+var APP_VERSION = '0.54';
 
 // ── Firebase ─────────────────────────────────────────────────────────────────
 // Même projet Firebase que Suivi Parc et Carburant, mais toutes les données
@@ -1339,18 +1362,19 @@ function carteJournee(j, admin) {
     var k = "'" + jsq(j.jk) + "','" + jsq(j.cid) + "'";
     var nbX = j.etapes.length - j.tours.length;
     return '<div class="item ' + (!j.terminee ? 'en-cours' : !admin || j.fin.saisi ? 'est-saisi' : 'a-saisir') + '">' +
-      '<div class="item-head"><span>' + j.plaques.map(function(p) { return '<span class="plaque" style="font-size:13px">' + escHtml(p) + '</span>'; }).join(' ') +
+      '<div class="item-head"><span>' + (j.fin.atelier ? '<span class="tag atelier">🔧 Atelier</span> ' : '') + j.plaques.map(function(p) { return '<span class="plaque" style="font-size:13px">' + escHtml(p) + '</span>'; }).join(' ') +
         (!j.terminee ? ' <span class="tag encours">🚚 En cours</span>' : !admin ? ' <span class="tag saisi">✅ Terminée</span>' : j.fin.saisi ? ' <span class="tag saisi">✅ Saisie</span>' : ' <span class="tag asaisir">🕓 À saisir</span>') +
       '</span><span class="item-date">' + fmtJour(j.date) + (j.rang > 1 ? '<br>' + j.rang + 'e journée' : '') + '</span></div>' +
       '<div class="item-body">' +
         (admin ? '<div>👤 <b>' + escHtml(j.nom) + '</b></div>' : '') +
+        (j.fin.atelier && !j.etapes.length ? '<div>🔧 Journée à l\'atelier</div>' :
         '<div>🔁 ' + j.tours.length + ' tour' + (j.tours.length > 1 ? 's' : '') + ' — <b>' + fmtNombre(j.m3) + ' m³</b>' +
-          (nbX ? ' — 🔄 ' + nbX + ' transfert' + (nbX > 1 ? 's' : '') : '') + '</div>' +
+          (nbX ? ' — 🔄 ' + nbX + ' transfert' + (nbX > 1 ? 's' : '') : '') + '</div>') +
         (j.eau ? '<div>💧 ' + fmtNombre(j.eau) + ' L d\'eau ajoutés</div>' : '') +
         j.km.map(function(k) { return (k.client ? '<div>🏢 ' + (j.km.length > 1 ? escHtml(k.plaque) + ' : ' : '') + 'Client <b>' + escHtml(k.client) + '</b></div>' : '') +
           (k.km ? '<div>📏 ' + (j.km.length > 1 ? escHtml(k.plaque) + ' : ' : '') + 'départ <b>' + fmtCompteur(k.km) + ' km</b>' +
           (k.kmFin ? ' → fin <b>' + fmtCompteur(k.kmFin) + ' km</b>' + ' (<b>' + fmtCompteur(k.kmFin - k.km) + ' km</b> parcourus)' : '') + '</div>' : ''); }).join('') +
-        (admin && can('journees') ? (function() { var ca = caJournee(j); return '<div>💶 Chiffre d\'affaires : <b>' + fmtEuro(ca.total) + ' HT</b>' +
+        (admin && can('journees') && !(j.fin.atelier && !j.etapes.length) ? (function() { var ca = caJournee(j); return '<div>💶 Chiffre d\'affaires : <b>' + fmtEuro(ca.total) + ' HT</b>' +
           (ca.manque ? ' <span style="color:var(--warn)">(' + ca.manque + ' ligne' + (ca.manque > 1 ? 's' : '') + ' sans prix)</span>' : '') + '</div>'; })() : '') +
         '<div>' + (j.terminee ? '🏁 Fin de journée validée ' + (j.fin.rattrapeLe ? 'après coup, le ' + new Date(j.fin.valideLe).toLocaleDateString('fr-FR') + ' ' : '') + 'à ' + heure(j.fin.valideLe) : '🚚 Journée en cours') +
           (j.fin.hasLV ? '' : ' — lettre de voiture pas encore envoyée') + '</div>' +
@@ -1366,10 +1390,13 @@ function carteJournee(j, admin) {
           '<div class="item-sub">' + escHtml(e.adresse) + ' ' + lienCarte(e) + '</div>' +
           '<div class="item-sub">' + texteGps(e) + '</div>' +
           '<div class="item-sub">' + escHtml(e.zone || '') + (e.distanceKm != null ? ' (' + fmtKm(e.distanceKm) + ')' : '') +
-          ' — ' + (e.eauAjout ? '💧 ' + fmtNombre(e.eauLitres) + ' L' : 'sans eau') + ' — ' + heure(e.enregistreLe) + prixEtape(e, admin, j) + '</div>' + comm +
+          ' — ' + (e.eauAjout ? '💧 ' + fmtNombre(e.eauLitres) + ' L' : 'sans eau') + ' — ' + (e.ajoutePar ? 'ajouté par ' + escHtml(e.ajoutePar) : heure(e.enregistreLe)) +
+          (e.modifiePar ? ', modifié par ' + escHtml(e.modifiePar) : '') + prixEtape(e, admin, j) + '</div>' + comm +
+          (admin && can('journees') ? '<button class="btn btn-secondary btn-small" onclick="ouvrirTourAdmin(' + k + ',' + Number(e.n) + ')">✏️ Modifier</button> ' : '') +
           (e.hasBL ? '<button class="btn btn-secondary btn-small" onclick="voirPhoto(\'/bl/' + jsq(j.jk) + '/' + jsq(j.cid) + '/' + jsq(e.n) + '\')">🧾 Bon de livraison</button>'
                    : '<div class="item-sub" style="color:var(--warn)">Bon de livraison pas encore envoyé</div>') + '</div>';
-      }).join('') + (admin && can('journees') ? '<button class="btn btn-secondary btn-small" style="margin-top:8px" onclick="ouvrirTransfertAdmin(' + k + ', null)">➕ Ajouter un transfert</button>' : '') + '</details>' : '') +
+      }).join('') + (admin && can('journees') ? boutonsAjoutAdmin(k) : '') + '</details>' :
+        admin && can('journees') && !j.fin.atelier ? '<div style="margin-top:8px">' + boutonsAjoutAdmin(k) + '</div>' : '') +
       (!admin ? blocRattrapage(j) : '') +
       '<div class="item-actions">' +
         (j.fin.hasLV ? '<button class="btn btn-secondary btn-small" onclick="voirPhoto(\'/lv/' + jsq(j.jk) + '/' + jsq(j.cid) + '\')">🧾 Lettre de voiture</button>' : '') +
@@ -1624,7 +1651,7 @@ function exportPleins() {
 // ── Chauffeur : rattrapage d'une journée passée pas terminée (réseau coupé, oubli…) ──
 // Possible tant que le bureau ne l'a pas marquée « saisie » : bons manquants, lettre de voiture, km de fin, validation
 function aRattraper(j) {
-  return !!me && me.role === 'chauffeur' && j.cid === me.id && j.jk !== maJournee && !j.fin.saisi && j.etapes.length > 0 &&
+  return !!me && me.role === 'chauffeur' && j.cid === me.id && j.jk !== maJournee && !j.fin.saisi && (j.etapes.length > 0 || !!j.fin.atelier) &&
     (!j.terminee || !j.fin.hasLV || j.tours.some(function(e) { return !e.hasBL; }));
 }
 function blocRattrapage(j) {
@@ -1702,7 +1729,7 @@ function verifierRattrapages() {
       return Promise.all([db.ref(ROOT + '/tours/' + jk + '/' + me.id).once('value'), db.ref(ROOT + '/finJournee/' + jk + '/' + me.id).once('value')])
         .then(function(r) {
           var t = r[0].val() || {}, f = r[1].val() || {}, tours = Object.keys(t).map(function(n) { return t[n]; }).filter(Boolean);
-          var ouverte = tours.length && !f.saisi && (!f.valideLe || !f.hasLV || tours.some(function(e) { return e.type !== 'transfert' && !e.hasBL; }));
+          var ouverte = (tours.length || f.atelier) && !f.saisi && (!f.valideLe || !f.hasLV || tours.some(function(e) { return e.type !== 'transfert' && !e.hasBL; }));
           return ouverte ? jk : null;
         });
     }));
@@ -1839,9 +1866,33 @@ function camionsDispo() {
     .sort(function(a, b) { return a.plaque.localeCompare(b.plaque); });
 }
 
+// Journée « Atelier » : pas de camion, pas de tour ; le chauffeur envoie seulement sa lettre de voiture
+function estAtelier() { return !!(maFin && maFin.atelier) && !monCamion(); }
+function choisirAtelier() {
+  if (!me || !maJournee || monCamion()) return;
+  confirmer('Journée à l\'atelier aujourd\'hui ? Vous n\'aurez que la lettre de voiture à envoyer.', { ok: '🔧 Atelier' }, function() {
+    var b = ROOT + '/finJournee/' + maJournee + '/' + me.id + '/', u = {};
+    u[ROOT + '/mesJournees/' + me.id + '/' + maJournee] = true;
+    u[b + 'chauffeurId'] = me.id; u[b + 'chauffeurNom'] = me.nom; u[b + 'atelier'] = true; u[b + 'atelierLe'] = Date.now();
+    envoiFiable(u, '🔧 Journée atelier').catch(function(e) { showToast('Erreur : ' + e.message); });
+  });
+}
+function annulerAtelier() {
+  if (!estAtelier() || maFin.hasLV) return;
+  var u = {};
+  u[ROOT + '/finJournee/' + maJournee + '/' + me.id] = null;
+  envoiFiable(u, 'Vous pouvez choisir votre camion').catch(function(e) { showToast('Erreur : ' + e.message); });
+}
 function renderCamionJour() {
   if (!me || me.role !== 'chauffeur') return;
   var p = monCamion();
+  if (!p && estAtelier()) {
+    $('camionChoix').classList.add('hidden'); $('camionPris').classList.remove('hidden'); $('camionCard').classList.remove('replie');
+    $('camionCardTitle').textContent = '🔧 Journée atelier';
+    $('camionPris').innerHTML = '<div class="km-ok">🔧 Vous êtes à l\'<b>atelier</b> aujourd\'hui : envoyez seulement votre lettre de voiture ci-dessous.</div>' +
+      (!maFin.hasLV ? '<button class="btn btn-secondary btn-small" style="margin-top:10px" onclick="annulerAtelier()">↩️ Je prends finalement un camion</button>' : '');
+    return;
+  }
   $('camionChoix').classList.toggle('hidden', !!p);
   $('camionPris').classList.toggle('hidden', !p);
   $('camionCard').classList.toggle('replie', false);
@@ -2221,6 +2272,12 @@ function centraleActuelle() {
 function renderTour() {
   if (!me || me.role !== 'chauffeur') return;
   var camion = monCamion();
+  if (!camion && estAtelier()) {
+    ['tourCard', 'suiteCard'].forEach(function(id) { $(id).classList.add('hidden'); });
+    $('finCard').classList.remove('hidden'); renderFinAtelier();
+    $('bientotCard').classList.add('hidden'); $('histoCard').classList.remove('hidden');
+    return;
+  }
   if (camion && kmManquant()) {
     ['tourCard', 'suiteCard', 'finCard'].forEach(function(id) { $(id).classList.add('hidden'); });
     return;
@@ -2492,6 +2549,29 @@ function renderFin(etapes) {
       '<button class="btn btn-secondary" style="margin-top:12px" onclick="fermerFinJournee()">↩️ Retour</button>';
   }
 }
+function renderFinAtelier() {
+  var resume = '<div class="fin-resume">🔧 Journée atelier</div>';
+  $('finContenu').innerHTML = maFin.hasLV
+    ? resume + '<div class="bl-ok">✅ Lettre de voiture envoyée à ' + heure(maFin.lvLe) +
+        '<div class="item-actions"><button class="btn btn-secondary btn-small" onclick="voirLV()">👁️ Voir</button>' +
+        '<button class="btn btn-secondary btn-small" onclick="choisirBL(\'lv\')">🔄 Remplacer la photo</button>' +
+        '<button class="btn btn-secondary btn-small" onclick="choisirBL(\'lv\', true)">🖼️ Galerie</button></div></div>' +
+        '<button class="btn btn-fin" id="finValBtn" style="width:100%;margin-top:12px;font-size:17px;padding:16px" onclick="validerFinAtelier()">🏁 Valider la fin de journée</button>'
+    : resume + '<div class="bl-zone" id="blZonelv" onclick="choisirBL(\'lv\')"><span class="big">📷</span>Envoyer la lettre de voiture journalière' +
+        '<small>Prenez la lettre en photo, posée à plat et bien éclairée</small></div>' +
+        '<button class="btn btn-secondary" id="lvGalerieBtn" style="width:100%;margin-top:10px" onclick="choisirBL(\'lv\', true)">🖼️ Choisir une photo dans la galerie</button>';
+}
+function validerFinAtelier() {
+  if (!estAtelier() || !maFin.hasLV) return;
+  confirmer('Valider la fin de votre journée atelier ?', { ok: 'Valider' }, function() {
+    var u = {}, now = Date.now(), btn = $('finValBtn');
+    if (btn) btn.disabled = true;
+    u[ROOT + '/finJournee/' + maJournee + '/' + me.id + '/valideLe'] = now;
+    u[ROOT + '/journeeEnCours/' + me.id] = { cle: journeeSuivante(), date: jourAffect };
+    envoiFiable(u, '✅ Journée terminée').then(function() { setTimeout(chargerHisto, 300); window.scrollTo(0, 0); })
+      .catch(function(e) { showToast('Erreur : ' + e.message); if (btn) btn.disabled = false; });
+  });
+}
 function envoyerLV(data) {
   var zone = $('blZonelv');
   if (zone) zone.innerHTML = '<span class="big">⏳</span>Envoi de la photo…';
@@ -2500,7 +2580,8 @@ function envoyerLV(data) {
   updates[ROOT + '/lv/' + base] = data;
   updates[ROOT + '/finJournee/' + base] = {
     chauffeurId: me.id, chauffeurNom: me.nom, plaque: monCamion(), hasLV: true, lvLe: Date.now(),
-    premierEnvoi: (maFin && maFin.premierEnvoi) || Date.now()
+    premierEnvoi: (maFin && maFin.premierEnvoi) || Date.now(),
+    atelier: estAtelier() || null, atelierLe: estAtelier() ? maFin.atelierLe || null : null
   };
   envoiFiable(updates, '✅ Lettre de voiture envoyée')
     .catch(function(e) { showToast('Échec de l\'envoi : ' + e.message); renderTour(); });
@@ -3225,6 +3306,11 @@ function subscribeTarifs() {
   prixManuelsRef.on('value', function(snap) { prixManuels = snap.val() || {}; renderFacturation(); renderJournees(); }, function() { prixManuels = {}; });
 }
 function prixManuel(e) { var p = e && e._jk ? ((prixManuels[e._jk] || {})[e._cid] || {})[e.n] : null; return p && p.montant != null && Number(p.montant) >= 0 ? p : null; }
+function boutonsAjoutAdmin(k) {
+  return '<div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap">' +
+    '<button class="btn btn-secondary btn-small" onclick="ouvrirTourAdmin(' + k + ', null)">➕ Ajouter un tour</button>' +
+    '<button class="btn btn-secondary btn-small" onclick="ouvrirTransfertAdmin(' + k + ', null)">➕ Ajouter un transfert</button></div>';
+}
 // ── Administrateur / bureau : transfert oublié ou mal saisi par le chauffeur ──
 var trAdm = null;
 function etapesJournee(jk, cid) {
@@ -3291,6 +3377,139 @@ function enregistrerTrAdm() {
   $('taSaveBtn').disabled = true;
   db.ref().update(u).then(function() { showToast(a.n != null ? '✅ Transfert modifié' : '✅ Transfert ajouté', true); fermerTrAdm(); })
     .catch(function(e) { showToast('Erreur : ' + e.message); }).then(function() { $('taSaveBtn').disabled = false; });
+}
+// ── Administrateur / bureau : tour oublié ou mal saisi par le chauffeur ──
+var toAdm = null, toDist = null, toSeq = 0;
+function optionsCentralesAdm(extra) {
+  var noms = centralesTriees().filter(function(c) { return c.actif !== false; }).map(function(c) { return c.nom; });
+  (extra || []).forEach(function(v) { if (v && noms.indexOf(v) === -1) noms.push(v); });
+  return '<option value="">— Choisir la centrale —</option>' + noms.map(function(x) { return '<option>' + escHtml(x) + '</option>'; }).join('');
+}
+function ouvrirTourAdmin(jk, cid, n) {
+  if (!can('journees')) return;
+  var l = etapesJournee(jk, cid), e = n != null ? ((tousTours[jk] || {})[cid] || {})[n] : null;
+  if (n != null && (!e || e.type === 'transfert')) return;
+  toAdm = { jk: jk, cid: cid, n: n }; toDist = null; toSeq++;
+  $('toCentrale').innerHTML = optionsCentralesAdm([e && e.centrale]);
+  $('toZone').innerHTML = '<option value="">— Choisir la zone —</option>' + ZONES.map(function(z) { return '<option>' + z + '</option>'; }).join('');
+  $('toZoneHint').className = 'hint'; $('toZoneHint').textContent = '';
+  $('toAdmTitre').textContent = e ? '🚚 Modifier le ' + ordinal(e.numero || 1) + ' tour' : '🚚 Ajouter un tour';
+  $('toPosField').classList.toggle('hidden', !!e);
+  $('toSuppr').classList.toggle('hidden', !e || !can('admin'));
+  if (e) {
+    $('toCentrale').value = e.centrale || ''; $('toClient').value = e.client || '';
+    $('toQte').value = e.quantite != null ? String(e.quantite).replace('.', ',') : '';
+    $('toAdresse').value = e.adresse || ''; $('toZone').value = e.zone || '';
+    $('toEau').value = e.eauAjout && e.eauLitres != null ? String(e.eauLitres).replace('.', ',') : '';
+    $('toComm').value = e.commentaire || '';
+    if (e.distanceKm != null) $('toZoneHint').textContent = '🛣️ ' + fmtKm(e.distanceKm) + ' depuis ' + (e.centrale || '');
+  } else {
+    $('toPos').innerHTML = '<option value="-1">Au début de la journée</option>' +
+      l.map(function(x, i) { return '<option value="' + i + '">Après le ' + escHtml(libEtape(x)) + '</option>'; }).join('');
+    $('toPos').value = String(l.length - 1);
+    ['toClient', 'toQte', 'toAdresse', 'toEau', 'toComm'].forEach(function(id) { $(id).value = ''; });
+    $('toZone').value = '';
+    toPositionChangee();
+  }
+  $('toAdmBg').classList.remove('hidden');
+}
+// Centrale pré-remplie : celle du tour d'avant, ou l'arrivée du transfert d'avant
+function toPositionChangee() {
+  if (!toAdm || toAdm.n != null) return;
+  var l = etapesJournee(toAdm.jk, toAdm.cid), i = Number($('toPos').value), p = l[i] || (i < 0 ? l[0] : null);
+  $('toCentrale').value = p ? (p.type === 'transfert' ? (l[i] ? p.arrivee : p.depart) : p.centrale) || '' : '';
+  toCalculer();
+}
+// Distance par la route depuis la centrale → zone proposée (comme côté chauffeur)
+function toCalculer() {
+  var c = $('toCentrale').value, adr = $('toAdresse').value.trim(), hint = $('toZoneHint'), seq = ++toSeq;
+  if (!c || !adr) { toDist = null; if (!toAdm || toAdm.n == null) { hint.className = 'hint'; hint.textContent = ''; } return; }
+  if (toDist && toDist.centrale === c && toDist.adresse === adr) return;
+  toDist = null;
+  hint.className = 'hint'; hint.textContent = '⏳ Calcul de la distance depuis ' + c + '…';
+  Promise.all([positionCentrale(centraleParNom(c)), geocoder(adr)]).then(function(p) {
+    return itineraire(p[0], p[1]).then(function(r) { r.dest = { lat: Math.round(p[1].lat * 1e6) / 1e6, lng: Math.round(p[1].lng * 1e6) / 1e6 }; return r; });
+  }).then(function(r) {
+    if (seq !== toSeq) return;
+    toDist = { centrale: c, adresse: adr, km: r.km, min: r.min, dest: r.dest };
+    var z = zoneDe(r.km);
+    $('toZone').value = z;
+    hint.className = 'hint ok';
+    hint.textContent = '🛣️ ' + fmtKm(r.km) + ' depuis ' + c + ' (≈ ' + fmtMin(r.min) + ') → ' + z;
+  }).catch(function() {
+    if (seq !== toSeq) return;
+    hint.className = 'hint warn';
+    hint.textContent = '⚠️ Distance non calculée (adresse introuvable ou pas de réseau) — choisissez la zone';
+  });
+}
+function fermerToAdm() { toAdm = null; toSeq++; $('toAdmBg').classList.add('hidden'); }
+// Numéros des tours (1er, 2e…) recalculés après un ajout ou une suppression
+function renumeroterTours(liste, base, u, nouveau) {
+  var num = 0;
+  liste.slice().sort(function(a, b) { return ordreEtape(a, a.n) - ordreEtape(b, b.n) || a.n - b.n; }).forEach(function(x) {
+    if (x.type === 'transfert') return;
+    num++;
+    if (nouveau && x.n === nouveau.n) nouveau.obj.numero = num;
+    else if (Number(x.numero) !== num) u[base + x.n + '/numero'] = num;
+  });
+}
+function enregistrerToAdm() {
+  var a = toAdm;
+  if (!a || !can('journees')) return;
+  var centrale = $('toCentrale').value, client = $('toClient').value.trim(), adresse = $('toAdresse').value.trim(), zone = $('toZone').value;
+  var qte = Number($('toQte').value.replace(',', '.').replace(/\s/g, ''));
+  var eauS = $('toEau').value.trim(), eau = eauS ? Number(eauS.replace(',', '.').replace(/\s/g, '')) : 0, comm = $('toComm').value.trim() || null;
+  if (!centrale) { showToast('Choisissez la centrale à béton de départ'); $('toCentrale').focus(); return; }
+  if (!client) { showToast('Indiquez le nom du client'); $('toClient').focus(); return; }
+  if (!qte || qte <= 0) { showToast('Indiquez la quantité en m³'); $('toQte').focus(); return; }
+  if (!adresse) { showToast("Indiquez l'adresse de livraison"); $('toAdresse').focus(); return; }
+  if (!zone) { showToast('Choisissez la zone'); $('toZone').focus(); return; }
+  if (eauS && !(eau > 0)) { showToast("Litres d'eau : un nombre, ou laissez vide"); $('toEau').focus(); return; }
+  var distOk = !!(toDist && toDist.centrale === centrale && toDist.adresse === adresse);
+  var base = ROOT + '/tours/' + a.jk + '/' + a.cid + '/', u = {}, now = Date.now();
+  var champs = { centrale: centrale, client: client, quantite: qte, adresse: adresse, zone: zone,
+    eauAjout: eau > 0, eauLitres: eau > 0 ? eau : null, commentaire: comm };
+  if (a.n != null) {
+    var e = ((tousTours[a.jk] || {})[a.cid] || {})[a.n];
+    if (!e) return;
+    if (distOk) { champs.distanceKm = toDist.km; champs.dureeMin = toDist.min; }
+    else if (centrale !== e.centrale || adresse !== e.adresse) { champs.distanceKm = null; champs.dureeMin = null; }
+    if (distOk && adresse !== e.adresse) champs.gps = { lat: toDist.dest.lat, lng: toDist.dest.lng, source: 'adresse' };
+    else if (adresse !== e.adresse) champs.gps = null;
+    champs.modifiePar = me.nom; champs.modifieLe = now;
+    Object.keys(champs).forEach(function(c) { u[base + a.n + '/' + c] = champs[c]; });
+  } else {
+    var l = etapesJournee(a.jk, a.cid), i = Number($('toPos').value), prev = l[i], next = l[i + 1];
+    var n = l.length ? Math.max.apply(null, l.map(function(x) { return x.n; })) + 1 : 1;
+    var o = function(x) { return ordreEtape(x, x.n); };
+    var ordre = !next ? null : !prev ? o(next) - 1 : (o(prev) + o(next)) / 2;
+    var j = toutesJournees().filter(function(x) { return x.jk === a.jk && x.cid === a.cid; })[0] || { plaques: [], km: [] };
+    var plaque = (prev && prev.plaque) || (next && next.plaque) || j.plaques[0] || null;
+    var km = j.km.filter(function(k) { return k.plaque === plaque; })[0] || j.km[0] || {};
+    var obj = Object.assign({ type: 'tour', numero: 1, plaque: plaque, chauffeurId: a.cid, chauffeurNom: j.nom || a.cid,
+      clientTravail: km.clientId || (prev && prev.clientTravail) || (next && next.clientTravail) || null }, champs, {
+      gps: distOk ? { lat: toDist.dest.lat, lng: toDist.dest.lng, source: 'adresse' } : null,
+      distanceKm: distOk ? toDist.km : null, dureeMin: distOk ? toDist.min : null, hasBL: false, ordre: ordre,
+      enregistreLe: prev ? prev.enregistreLe : next ? next.enregistreLe : now, ajoutePar: me.nom, ajouteLe: now });
+    renumeroterTours(l.concat([{ n: n, type: 'tour', ordre: ordre }]), base, u, { n: n, obj: obj });
+    u[base + n] = obj;
+  }
+  $('toSaveBtn').disabled = true;
+  db.ref().update(u).then(function() { showToast(a.n != null ? '✅ Tour modifié' : '✅ Tour ajouté', true); fermerToAdm(); })
+    .catch(function(e) { showToast('Erreur : ' + e.message); }).then(function() { $('toSaveBtn').disabled = false; });
+}
+function supprimerToAdm() {
+  var a = toAdm;
+  if (!a || a.n == null || !can('admin')) return;
+  $('toAdmBg').classList.add('hidden');
+  confirmer('Supprimer ce tour ? Son bon de livraison sera supprimé aussi.', { ok: 'Supprimer', danger: true }, function() {
+    var base = ROOT + '/tours/' + a.jk + '/' + a.cid + '/', u = {};
+    u[base + a.n] = null;
+    u[ROOT + '/bl/' + a.jk + '/' + a.cid + '/' + a.n] = null;
+    u[ROOT + '/prixManuels/' + a.jk + '/' + a.cid + '/' + a.n] = null;
+    renumeroterTours(etapesJournee(a.jk, a.cid).filter(function(x) { return x.n !== a.n; }), base, u);
+    db.ref().update(u).then(function() { showToast('Tour supprimé'); fermerToAdm(); }).catch(function(e) { showToast('Erreur : ' + e.message); });
+  });
 }
 function supprimerTrAdm() {
   var a = trAdm;
